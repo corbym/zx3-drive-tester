@@ -343,12 +343,10 @@ static void test_seek_interactive(void) {
 
     switch (ch) {
       case 'J':
-        target -= 1;
-        if (target < 0) target = 0;
+        target = target > 0 ? target - 1 : 0;
         break;
       case 'K':
-        target += 1;
-        if (target > 39) target = 39;  // +3 has 40 cylinders numbered 0-39
+        target = target < 39 ? target + 1 : 39;  // +3 has 40 cylinders numbered 0-39
         break;
       case 'Q':
         plus3_motor(0);
