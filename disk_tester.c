@@ -24,6 +24,8 @@
  *     zcc +zx -create-app disk_tester.c -o out/disk_tester
  */
 
+#include "disk_tester.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -171,11 +173,17 @@ static unsigned char wait_seek_complete(unsigned int polls,
   return 0;
 }
 
+void press_any_key(int interactive) {
+  if (interactive == 1) {
+    printf("Press any key to continue...\n");
+    getchar(); /* pause for user to inspect results */
+  }
+}
 /* -------------------------------------------------------------------------- */
 /* Tests                                                                      */
 /* -------------------------------------------------------------------------- */
 
-static void test_motor(void) {
+static void test_motor(int interactive) {
   unsigned int i;
 
   printf("\n*** TEST: Motor Control (0x1FFD bit 3) ***\n");
@@ -188,39 +196,77 @@ static void test_motor(void) {
       "NOTE: The uPD765A MSR has no motor status bit, this only verifies we "
       "can still read MSR.\n");
   results.motor_test_pass = 1;
-
+  press_any_key(interactive);
   printf("Turning motor OFF...\n");
   plus3_motor(0);
   for (i = 0; i < 8000; i++);
+  press_any_key(interactive);
 }
-
-static void test_sense_drive(void) {
+static void test_sense_drive(int interactive) {
   unsigned char st3 = 0;
+  unsigned char st0 = 0, pcn = 0;
+  unsigned char rid_ok = 0;
+  unsigned char st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
+  unsigned char have_st3 = 0;
 
-  printf("\n*** TEST: Sense Drive Status (0x04) ***\n");
+  printf("\n*** TEST: Drive status (ST3) + media probe (Read ID) ***\n");
+  printf(
+      "Note: ST3 lines may be fixed in some emulators, Read ID is the reliable "
+      "probe.\n");
 
   plus3_motor(1);
 
-  if (!cmd_sense_drive_status(FDC_DRIVE, 0, &st3)) {
-    printf("FAIL: Could not read ST3 (timeout)\n");
-    results.sense_drive_pass = 0;
-    plus3_motor(0);
-    return;
+  /* 1) Raw drive lines (ST3), informational */
+  have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
+  if (!have_st3) {
+    printf("ST3: not available (timeout)\n");
+  } else {
+    printf("ST3 = 0x%02X\n", st3);
+    printf("  Ready:         %s\n", (st3 & 0x20) ? "YES" : "NO");
+    printf("  Write protect: %s\n", (st3 & 0x40) ? "YES" : "NO");
+    printf("  Track 0:       %s\n", (st3 & 0x10) ? "YES" : "NO");
+    printf("  Fault:         %s\n", (st3 & 0x80) ? "YES" : "NO");
   }
 
-  printf("ST3 = 0x%02X\n", st3);
-  printf("  Ready:         %s\n", (st3 & 0x20) ? "YES" : "NO");
-  printf("  Write protect: %s\n", (st3 & 0x40) ? "YES" : "NO");
-  printf("  Track 0:       %s\n", (st3 & 0x10) ? "YES" : "NO");
-  printf("  Fault:         %s\n", (st3 & 0x80) ? "YES" : "NO");
+  /* 2) A command that tends to surface "not ready" in ST0 (and steps hardware)
+   */
+  if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(250, &st0, &pcn)) {
+    printf("SenseInt after recal: ST0=0x%02X, PCN=%u\n", st0, pcn);
+    /* ST0 bit 3 = NR (Not Ready) */
+    printf("  Not Ready (NR): %s\n", (st0 & 0x08) ? "YES" : "NO");
+  } else {
+    printf("Recalibrate: no completion (timeout)\n");
+  }
 
-  results.sense_drive_pass = (unsigned char)((st3 & 0x20) != 0);
-  printf("  %s\n", results.sense_drive_pass ? "PASS" : "FAIL");
+  /* 3) Media probe: Read ID, best indicator for both hardware and emulation */
+  rid_ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
+
+  printf("Read ID result: ST0=0x%02X ST1=0x%02X ST2=0x%02X\n", st0, st1, st2);
+  if (rid_ok) {
+    printf("  CHRN: C=%u H=%u R=%u N=%u\n", c, h, r, n);
+    printf("  Media probe: PASS (ID field readable)\n");
+  } else {
+    printf(
+        "  Media probe: FAIL (no disk, not ready, wrong format, or read "
+        "error)\n");
+  }
+
+  /*
+   * PASS/FAIL logic:
+   * - We PASS if Read ID works, because that proves the disk path works in both
+   * real hardware and ZEsarUX.
+   * - If Read ID fails, we FAIL even if ST3 says Ready (common emulator
+   * behaviour).
+   */
+  results.sense_drive_pass = rid_ok ? 1 : 0;
+  printf("Overall: %s\n", results.sense_drive_pass ? "PASS" : "FAIL");
 
   plus3_motor(0);
+  press_any_key(interactive);
 }
 
-static void test_recalibrate(void) {
+
+static void test_recalibrate(int interactive) {
   unsigned char st0 = 0, pcn = 0;
 
   printf("\n*** TEST: Recalibrate to Track 0 (0x07) ***\n");
@@ -246,9 +292,10 @@ static void test_recalibrate(void) {
   printf("  %s\n", results.recalibrate_pass ? "PASS" : "FAIL");
 
   plus3_motor(0);
+  press_any_key(interactive);
 }
 
-static void test_seek(void) {
+static void test_seek(int interactive) {
   unsigned char st0 = 0, pcn = 0;
   unsigned char target = 10;
 
@@ -275,6 +322,7 @@ static void test_seek(void) {
   printf("  %s\n", results.seek_pass ? "PASS" : "FAIL");
 
   plus3_motor(0);
+  press_any_key(interactive);
 }
 static void test_seek_interactive(void) {
   unsigned char st0 = 0, pcn = 0;
@@ -322,7 +370,7 @@ static void test_seek_interactive(void) {
     printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
   }
 }
-static void test_read_id(void) {
+static void test_read_id(int interactive) {
   unsigned char st0, st1, st2, c, h, r, n;
   unsigned char ok;
 
@@ -347,6 +395,7 @@ static void test_read_id(void) {
   printf("  %s\n", ok ? "PASS" : "FAIL");
 
   plus3_motor(0);
+  press_any_key(interactive);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -380,10 +429,10 @@ static void print_results(void) {
 static void run_all_tests(void) {
   memset(&results, 0, sizeof(results));
   test_motor();
-  test_sense_drive();
-  test_recalibrate();
-  test_seek();
-  test_read_id();
+  test_sense_drive(0);
+  test_recalibrate(0);
+  test_seek(0);
+  test_read_id(0);
   print_results();
 }
 
@@ -422,7 +471,7 @@ int main(void) {
         test_motor();
         break;
       case '2':
-        test_sense_drive();
+        test_sense_drive(1);
         break;
       case '3':
         test_recalibrate();
