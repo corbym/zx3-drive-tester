@@ -428,7 +428,7 @@ static void print_results(void) {
 
 static void run_all_tests(void) {
   memset(&results, 0, sizeof(results));
-  test_motor();
+  test_motor(0);
   test_sense_drive(0);
   test_recalibrate(0);
   test_seek(0);
@@ -468,22 +468,22 @@ int main(void) {
 
     switch (ch) {
       case '1':
-        test_motor();
+        test_motor(1);
         break;
       case '2':
         test_sense_drive(1);
         break;
       case '3':
-        test_recalibrate();
+        test_recalibrate(1);
         break;
       case '4':
-        test_seek();
+        test_seek(1);
         break;
       case '5':
         test_seek_interactive();
         break;
       case '6':
-        test_read_id();
+        test_read_id(1);
         break;
       case 'A':
         run_all_tests();
