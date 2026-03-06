@@ -22,8 +22,6 @@ This project targets the **ZX Spectrum +3** internal floppy system:
 - `0x3FFD`: FDC Data Register, read/write
 - `0x1FFD`: +3 system control (motor on bit 3), also memory/ROM paging, write-only
 
-Because `0x1FFD` also controls paging, the code preserves the OS shadow byte at `0x5B67` and only toggles motor bit 3, rather than writing arbitrary values to `0x1FFD`.
-
 ## Build
 
 ### Prerequisites
