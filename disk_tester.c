@@ -43,7 +43,9 @@
 
 #define FDC_DRIVE 0 /* internal drive is drive 0 */
 
+#define MOTOR_DRIVE_BIT_MASK ((unsigned char)0x08)
 #define BANK_678 (*(volatile unsigned char*)0x5B67)
+
 /* Test results storage */
 typedef struct {
   unsigned char motor_test_pass;
@@ -62,20 +64,17 @@ static TestResults results;
 static unsigned char fdc_msr(void) { return inp(FDC_MSR_PORT); }
 
 static void plus3_motor(unsigned char on) {
-  unsigned char v;
-  __asm__("di");
-  v = BANK_678;
+  unsigned char bankValue = BANK_678;
   if (on)
-    v |= 0x08; /* set bit 3 */
+    bankValue |= MOTOR_DRIVE_BIT_MASK;
   else
-    v &= (unsigned char)~0x08; /* clear bit 3 */
+    bankValue &= (unsigned char)~MOTOR_DRIVE_BIT_MASK;
 
-  BANK_678 = v;
-  outp(PLUS3_SYS_PORT, v); /* apply */
+  BANK_678 = bankValue;
+  outp(PLUS3_SYS_PORT, bankValue); /* apply */
   if (on) {
     for (int i = 0; i < 30000; i++);
   }
-  __asm__("ei");
 }
 /* Wait until RQM set and DIO matches desired direction.
    want_dio = 0 for CPU->FDC (write), 1 for FDC->CPU (read). */
