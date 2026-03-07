@@ -34,8 +34,6 @@
 #define FDC_MSR_PORT 0x2FFD
 #define FDC_DATA_PORT 0x3FFD
 
-#define PLUS3_MOTOR_BIT 0x08
-
 /* uPD765A MSR bits */
 #define MSR_RQM 0x80 /* Request for Master */
 #define MSR_DIO 0x40 /* Data direction: 1 = FDC->CPU */
