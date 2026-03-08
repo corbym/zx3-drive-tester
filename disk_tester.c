@@ -29,7 +29,19 @@
 #include <stdio.h>
 #include <string.h>
 
-#define LOOPS_PER_MS 250U  
+#define LOOPS_PER_MS 250U
+
+/* Busy-wait delay. The #asm nop prevents sccz80 eliminating the empty loop. */
+static void delay_ms(unsigned int ms) {
+  unsigned int i, j;
+  for (i = 0; i < ms; i++) {
+    for (j = 0; j < LOOPS_PER_MS; j++) {
+#asm
+      nop
+#endasm
+    }
+  }
+}
 
 /* +3 ports */
 #define PLUS3_SYS_PORT 0x1FFD
@@ -61,100 +73,11 @@ static TestResults results;
 /* Low-level I/O                                                              */
 /* -------------------------------------------------------------------------- */
 
+extern void motor_on_asm(void);
+extern void motor_off_asm(void);
+
 static unsigned char fdc_msr(void) { return inp(FDC_MSR_PORT); }
 
-/* --------------------------------------------------------------------------
- * motor_on_asm() / motor_off_asm()
- *
- * Set/clear bit 3 of BANK678 (0x5B67, the RAM shadow of write-only port
- * 0x1FFD), then OUT to the port.  DI protects the read-modify-write from
- * the +3's 50 Hz IM1 ISR, which also touches port 0x1FFD.
- *
- * LD A,I copies IFF2 into P/V on NMOS Z80 (genuine +3); in normal use
- * IFF2 = IFF1, so P/V reflects whether interrupts were enabled.  AF is
- * pushed before OR/AND can corrupt the flags; after the OUT, POP AF
- * restores both A and F, then JP PO conditionally re-enables interrupts.
- * This is the same pattern used by the +3DOS ROM motor routines so that
- * the functions are safe whether called from user context or ISR context.
- *
- * The LD A,I "pending-interrupt" bug (P/V forced to 0 if an interrupt is
- * accepted during the instruction) has ~0.013% probability per call at
- * 3.5 MHz / 50 Hz, making it negligible in practice.
- * -------------------------------------------------------------------------- */
-static void motor_on_asm(void)
-{
-#asm
-    ld   a,i              ; copy IFF2 into P/V (NMOS Z80; IFF2=IFF1 in normal use)
-    di                    ; disable interrupts
-    push af               ; save flags (P/V=IFF2) before OR clobbers them
-    ld   a,(0x5B67)       ; load BANK678 shadow of port 0x1FFD
-    or   0x08             ; set motor bit (bit 3)
-    ld   (0x5B67),a       ; write back shadow
-    ld   bc,0x1FFD
-    out  (c),a            ; write to port
-    pop  af               ; restore A and F (P/V = saved IFF2 state)
-    jp   po,motor_on_done ; P/V=0: ints were disabled, skip EI
-    ei                    ; P/V=1: ints were enabled, restore
-motor_on_done:
-#endasm
-}
-
-static void motor_off_asm(void)
-{
-#asm
-    ld   a,i               ; copy IFF2 into P/V (NMOS Z80; IFF2=IFF1 in normal use)
-    di                     ; disable interrupts
-    push af                ; save flags (P/V=IFF2) before AND clobbers them
-    ld   a,(0x5B67)        ; load BANK678 shadow of port 0x1FFD
-    and  0xF7              ; clear motor bit (bit 3): AND ~0x08
-    ld   (0x5B67),a        ; write back shadow
-    ld   bc,0x1FFD
-    out  (c),a             ; write to port
-    pop  af                ; restore A and F (P/V = saved IFF2 state)
-    jp   po,motor_off_done ; P/V=0: ints were disabled, skip EI
-    ei                     ; P/V=1: ints were enabled, restore
-motor_off_done:
-#endasm
-}
-
-/* --------------------------------------------------------------------------
- * delay_ms(ms)
- * Simple busy-wait delay.  The #asm nop prevents sccz80 eliminating the
- * empty inner loop.  LOOPS_PER_MS is 16-bit to keep the inner comparison
- * cheap on Z80.
- * -------------------------------------------------------------------------- */
-static void delay_ms(unsigned int ms)
-{
-    unsigned int i, j;
-    for (i = 0; i < ms; i++) {
-        for (j = 0; j < LOOPS_PER_MS; j++) {
-#asm
-            nop
-#endasm
-        }
-    }
-}
-/*
- * plus3_motor_on()
- * Turns the +3 floppy drive motor ON and waits for spin-up.
- *
- */
-unsigned char plus3_motor_on(void)
-{
-    motor_on_asm();
-    delay_ms(500);
-    return 0;
-}
-
-/*
- * plus3_motor_off()
- * Turns the +3 floppy drive motor OFF.
- * Only call this when no FDC command is in progress.
- */
-void plus3_motor_off(void)
-{
-    motor_off_asm();
-}
 /* Wait until RQM set and DIO matches desired direction.
    want_dio = 0 for CPU->FDC (write), 1 for FDC->CPU (read). */
 static unsigned char fdc_wait_rqm(unsigned char want_dio,
@@ -177,6 +100,53 @@ static unsigned char fdc_read(unsigned char* out) {
   if (!fdc_wait_rqm(1, 60000)) return 0;
   *out = inp(FDC_DATA_PORT);
   return 1;
+}
+
+/*
+ * fdc_drain_interrupts()
+ *
+ * The uPD765A asserts INTRQ whenever a drive's READY state changes (motor
+ * on -> ready, motor off -> not-ready) as well as after seek/recalibrate.
+ * In IM1 mode the Z80 re-checks INT after every instruction.  If INTRQ is
+ * left asserted and interrupts are enabled, the IM1 handler fires in a
+ * tight loop, the stack overflows within milliseconds, and the machine
+ * resets.
+ *
+ * Sense Interrupt Status (0x08) reads and clears one pending interrupt.
+ * If ST0 IC bits = 10b (0x80), no interrupt is pending and we stop.
+ * The FDC can queue at most 4 interrupts (one per drive), so 4 iterations
+ * is sufficient to guarantee INTRQ is de-asserted.
+ */
+static void fdc_drain_interrupts(void) {
+  unsigned char st0, pcn, i;
+  for (i = 0; i < 4; i++) {
+    if (!fdc_write(0x08)) break; /* Sense Interrupt Status */
+    if (!fdc_read(&st0)) break;
+    if ((st0 & 0xC0) == 0x80) break; /* IC=10b: no pending interrupt */
+    if (!fdc_read(&pcn)) break;      /* consume PCN to complete read */
+  }
+}
+
+/*
+ * plus3_motor_on()
+ * Turns the +3 floppy drive motor ON and waits for spin-up.
+ *
+ */
+unsigned char plus3_motor_on(void) {
+  motor_on_asm();
+  delay_ms(500);          /* wait for drive to reach operating speed */
+  fdc_drain_interrupts(); /* clear drive-ready INTRQ before re-enabling ints */
+  return 0;
+}
+
+/*
+ * plus3_motor_off()
+ * Turns the +3 floppy drive motor OFF.
+ * Only call this when no FDC command is in progress.
+ */
+void plus3_motor_off(void) {
+  motor_off_asm();
+  fdc_drain_interrupts(); 
 }
 
 /* -------------------------------------------------------------------------- */
@@ -219,8 +189,8 @@ static unsigned char cmd_read_id(unsigned char drive, unsigned char head,
                                  unsigned char* st2, unsigned char* c,
                                  unsigned char* h, unsigned char* r,
                                  unsigned char* n) {
-  /* Read ID */
-  if (!fdc_write(0x0A)) return 0;
+  /* Read ID, MFM mode (bit 6 set). 0x0A = FM mode; +3 disks are MFM only. */
+  if (!fdc_write(0x4A)) return 0;
   if (!fdc_write((head << 2) | (drive & 0x03))) return 0;
 
   /* Result phase: 7 bytes */
@@ -236,24 +206,43 @@ static unsigned char cmd_read_id(unsigned char drive, unsigned char head,
   return (unsigned char)(((*st0 & 0xC0) == 0) && (*st1 == 0) && (*st2 == 0));
 }
 
-/* Poll for completion of a seek/recalibrate by consuming Sense Interrupt
-   Status. Returns 1 when SE bit observed in ST0, 0 on timeout or I/O failure.
+/*
+ * wait_seek_complete()
+ *
+ * Waits for a seek or recalibrate to finish, then issues one Sense Interrupt
+ * Status to collect ST0 and PCN.
+ *
+ * On a real uPD765A, seek and recalibrate are background operations.  The FDC
+ * sets the drive-busy bit in the MSR (bit 0 for drive 0) and immediately
+ * returns to idle.  If Sense Interrupt Status is issued before the seek
+ * finishes, the FDC has no interrupt to report and returns ST0=0x80 (invalid
+ * command) as a SINGLE byte with no PCN.  The second fdc_read() then times
+ * out, cmd_sense_interrupt() returns 0, and the caller sees a failure.
+ * Emulators tolerate this; real hardware does not.
+ *
+ * The fix is to poll MSR bit 0 (D0B, drive 0 busy) until it clears, which
+ * signals that the seek has completed and a pending interrupt is waiting.
+ * Only then is Sense Interrupt Status issued.
  */
-static unsigned char wait_seek_complete(unsigned int polls,
+static unsigned char wait_seek_complete(unsigned char drive,
                                         unsigned char* out_st0,
                                         unsigned char* out_pcn) {
-  while (polls--) {
-    unsigned char st0, pcn;
-    if (!cmd_sense_interrupt(&st0, &pcn)) return 0;
+  unsigned char st0, pcn;
+  unsigned int i;
+  unsigned char busy_bit = (unsigned char)(1u << (drive & 0x03));
 
-    /* ST0 bit 5 = Seek End (SE) */
-    if (st0 & 0x20) {
-      *out_st0 = st0;
-      *out_pcn = pcn;
-      return 1;
-    }
+  /* Wait for drive-busy bit to clear in MSR */
+  for (i = 0; i < 60000U; i++) {
+    if (!(fdc_msr() & busy_bit)) break;
   }
-  return 0;
+  if (i == 60000U) return 0; /* timed out */
+
+  /* Issue Sense Interrupt Status exactly once now that seek is complete */
+  if (!cmd_sense_interrupt(&st0, &pcn)) return 0;
+  if (!(st0 & 0x20)) return 0; /* SE (Seek End) must be set */
+  *out_st0 = st0;
+  *out_pcn = pcn;
+  return 1;
 }
 
 void press_any_key(int interactive) {
@@ -274,9 +263,6 @@ static void test_motor(int interactive) {
   plus3_motor_on();
 
   printf("FDC MSR: 0x%02X\n", fdc_msr());
-  printf(
-      "NOTE: The uPD765A MSR has no motor status bit, this only verifies we "
-      "can still read MSR.\n");
   results.motor_test_pass = 1;
   press_any_key(interactive);
   printf("Turning motor OFF...\n");
@@ -291,10 +277,6 @@ static void test_sense_drive(int interactive) {
   unsigned char have_st3 = 0;
 
   printf("\n*** TEST: Drive status (ST3) + media probe (Read ID) ***\n");
-  printf(
-      "Note: ST3 lines may be fixed in some emulators, Read ID is the reliable "
-      "probe.\n");
-
   plus3_motor_on();
 
   /* 1) Raw drive lines (ST3), informational */
@@ -311,7 +293,7 @@ static void test_sense_drive(int interactive) {
 
   /* 2) A command that tends to surface "not ready" in ST0 (and steps hardware)
    */
-  if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(250, &st0, &pcn)) {
+  if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
     printf("SenseInt after recal: ST0=0x%02X, PCN=%u\n", st0, pcn);
     /* ST0 bit 3 = NR (Not Ready) */
     printf("  Not Ready (NR): %s\n", (st0 & 0x08) ? "YES" : "NO");
@@ -360,7 +342,7 @@ static void test_recalibrate(int interactive) {
     return;
   }
 
-  if (!wait_seek_complete(250, &st0, &pcn)) {
+  if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
     printf("FAIL: Timeout waiting for completion\n");
     results.recalibrate_pass = 0;
     plus3_motor_off();
@@ -390,7 +372,7 @@ static void test_seek(int interactive) {
     return;
   }
 
-  if (!wait_seek_complete(250, &st0, &pcn)) {
+  if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
     printf("FAIL: Timeout waiting for completion\n");
     results.seek_pass = 0;
     plus3_motor_off();
@@ -441,7 +423,7 @@ static void test_seek_interactive(void) {
       return;
     }
 
-    if (!wait_seek_complete(250, &st0, &pcn)) {
+    if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
       printf("FAIL: Timeout waiting for completion\n");
       return;
     }
@@ -462,7 +444,7 @@ static void test_read_id(int interactive) {
   cmd_recalibrate(FDC_DRIVE);
   {
     unsigned char t0, tp;
-    wait_seek_complete(250, &t0, &tp);
+    wait_seek_complete(FDC_DRIVE, &t0, &tp);
   }
 
   ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
