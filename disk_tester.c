@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define LOOPS_PER_MS 250U  
+
 /* +3 ports */
 #define PLUS3_SYS_PORT 0x1FFD
 #define FDC_MSR_PORT 0x2FFD
@@ -61,18 +63,97 @@ static TestResults results;
 
 static unsigned char fdc_msr(void) { return inp(FDC_MSR_PORT); }
 
-static void plus3_motor(unsigned char on) {
-  unsigned char bankValue = BANK_678;
-  if (on)
-    bankValue |= MOTOR_DRIVE_BIT_MASK;
-  else
-    bankValue &= (unsigned char)~MOTOR_DRIVE_BIT_MASK;
+/* --------------------------------------------------------------------------
+ * motor_on_asm() / motor_off_asm()
+ *
+ * Set/clear bit 3 of BANK678 (0x5B67, the RAM shadow of write-only port
+ * 0x1FFD), then OUT to the port.  DI protects the read-modify-write from
+ * the +3's 50 Hz IM1 ISR, which also touches port 0x1FFD.
+ *
+ * LD A,I copies IFF2 into P/V on NMOS Z80 (genuine +3); in normal use
+ * IFF2 = IFF1, so P/V reflects whether interrupts were enabled.  AF is
+ * pushed before OR/AND can corrupt the flags; after the OUT, POP AF
+ * restores both A and F, then JP PO conditionally re-enables interrupts.
+ * This is the same pattern used by the +3DOS ROM motor routines so that
+ * the functions are safe whether called from user context or ISR context.
+ *
+ * The LD A,I "pending-interrupt" bug (P/V forced to 0 if an interrupt is
+ * accepted during the instruction) has ~0.013% probability per call at
+ * 3.5 MHz / 50 Hz, making it negligible in practice.
+ * -------------------------------------------------------------------------- */
+static void motor_on_asm(void)
+{
+#asm
+    ld   a,i              ; copy IFF2 into P/V (NMOS Z80; IFF2=IFF1 in normal use)
+    di                    ; disable interrupts
+    push af               ; save flags (P/V=IFF2) before OR clobbers them
+    ld   a,(0x5B67)       ; load BANK678 shadow of port 0x1FFD
+    or   0x08             ; set motor bit (bit 3)
+    ld   (0x5B67),a       ; write back shadow
+    ld   bc,0x1FFD
+    out  (c),a            ; write to port
+    pop  af               ; restore A and F (P/V = saved IFF2 state)
+    jp   po,motor_on_done ; P/V=0: ints were disabled, skip EI
+    ei                    ; P/V=1: ints were enabled, restore
+motor_on_done:
+#endasm
+}
 
-  BANK_678 = bankValue;
-  outp(PLUS3_SYS_PORT, bankValue); /* apply */
-  if (on) {
-    for (int i = 0; i < 30000; i++);
-  }
+static void motor_off_asm(void)
+{
+#asm
+    ld   a,i               ; copy IFF2 into P/V (NMOS Z80; IFF2=IFF1 in normal use)
+    di                     ; disable interrupts
+    push af                ; save flags (P/V=IFF2) before AND clobbers them
+    ld   a,(0x5B67)        ; load BANK678 shadow of port 0x1FFD
+    and  0xF7              ; clear motor bit (bit 3): AND ~0x08
+    ld   (0x5B67),a        ; write back shadow
+    ld   bc,0x1FFD
+    out  (c),a             ; write to port
+    pop  af                ; restore A and F (P/V = saved IFF2 state)
+    jp   po,motor_off_done ; P/V=0: ints were disabled, skip EI
+    ei                     ; P/V=1: ints were enabled, restore
+motor_off_done:
+#endasm
+}
+
+/* --------------------------------------------------------------------------
+ * delay_ms(ms)
+ * Simple busy-wait delay.  The #asm nop prevents sccz80 eliminating the
+ * empty inner loop.  LOOPS_PER_MS is 16-bit to keep the inner comparison
+ * cheap on Z80.
+ * -------------------------------------------------------------------------- */
+static void delay_ms(unsigned int ms)
+{
+    unsigned int i, j;
+    for (i = 0; i < ms; i++) {
+        for (j = 0; j < LOOPS_PER_MS; j++) {
+#asm
+            nop
+#endasm
+        }
+    }
+}
+/*
+ * plus3_motor_on()
+ * Turns the +3 floppy drive motor ON and waits for spin-up.
+ *
+ */
+unsigned char plus3_motor_on(void)
+{
+    motor_on_asm();
+    delay_ms(500);
+    return 0;
+}
+
+/*
+ * plus3_motor_off()
+ * Turns the +3 floppy drive motor OFF.
+ * Only call this when no FDC command is in progress.
+ */
+void plus3_motor_off(void)
+{
+    motor_off_asm();
 }
 /* Wait until RQM set and DIO matches desired direction.
    want_dio = 0 for CPU->FDC (write), 1 for FDC->CPU (read). */
@@ -190,7 +271,7 @@ static void test_motor(int interactive) {
 
   printf("\n*** TEST: Motor Control (0x1FFD bit 3) ***\n");
   printf("Turning motor ON...\n");
-  plus3_motor(1);
+  plus3_motor_on();
 
   printf("FDC MSR: 0x%02X\n", fdc_msr());
   printf(
@@ -199,7 +280,7 @@ static void test_motor(int interactive) {
   results.motor_test_pass = 1;
   press_any_key(interactive);
   printf("Turning motor OFF...\n");
-  plus3_motor(0);
+  plus3_motor_off();
   press_any_key(interactive);
 }
 static void test_sense_drive(int interactive) {
@@ -214,7 +295,7 @@ static void test_sense_drive(int interactive) {
       "Note: ST3 lines may be fixed in some emulators, Read ID is the reliable "
       "probe.\n");
 
-  plus3_motor(1);
+  plus3_motor_on();
 
   /* 1) Raw drive lines (ST3), informational */
   have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
@@ -261,7 +342,7 @@ static void test_sense_drive(int interactive) {
   results.sense_drive_pass = rid_ok ? 1 : 0;
   printf("Overall: %s\n", results.sense_drive_pass ? "PASS" : "FAIL");
 
-  plus3_motor(0);
+  plus3_motor_off();
   press_any_key(interactive);
 }
 
@@ -270,19 +351,19 @@ static void test_recalibrate(int interactive) {
 
   printf("\n*** TEST: Recalibrate to Track 0 (0x07) ***\n");
 
-  plus3_motor(1);
+  plus3_motor_on();
 
   if (!cmd_recalibrate(FDC_DRIVE)) {
     printf("FAIL: Could not issue recalibrate (timeout)\n");
     results.recalibrate_pass = 0;
-    plus3_motor(0);
+    plus3_motor_off();
     return;
   }
 
   if (!wait_seek_complete(250, &st0, &pcn)) {
     printf("FAIL: Timeout waiting for completion\n");
     results.recalibrate_pass = 0;
-    plus3_motor(0);
+    plus3_motor_off();
     return;
   }
 
@@ -290,7 +371,7 @@ static void test_recalibrate(int interactive) {
   results.recalibrate_pass = (unsigned char)(pcn == 0);
   printf("  %s\n", results.recalibrate_pass ? "PASS" : "FAIL");
 
-  plus3_motor(0);
+  plus3_motor_off();
   press_any_key(interactive);
 }
 
@@ -300,19 +381,19 @@ static void test_seek(int interactive) {
 
   printf("\n*** TEST: Seek to Cylinder %u (0x0F) ***\n", target);
 
-  plus3_motor(1);
+  plus3_motor_on();
 
   if (!cmd_seek(FDC_DRIVE, 0, target)) {
     printf("FAIL: Could not issue seek (timeout)\n");
     results.seek_pass = 0;
-    plus3_motor(0);
+    plus3_motor_off();
     return;
   }
 
   if (!wait_seek_complete(250, &st0, &pcn)) {
     printf("FAIL: Timeout waiting for completion\n");
     results.seek_pass = 0;
-    plus3_motor(0);
+    plus3_motor_off();
     return;
   }
 
@@ -320,7 +401,7 @@ static void test_seek(int interactive) {
   results.seek_pass = (unsigned char)(pcn == target);
   printf("  %s\n", results.seek_pass ? "PASS" : "FAIL");
 
-  plus3_motor(0);
+  plus3_motor_off();
   press_any_key(interactive);
 }
 static void test_seek_interactive(void) {
@@ -329,7 +410,7 @@ static void test_seek_interactive(void) {
 
   printf("\n*** TEST: Seek to Cylinder Step ***\n");
 
-  plus3_motor(1);
+  plus3_motor_on();
 
   for (;;) {
     printf(
@@ -349,7 +430,7 @@ static void test_seek_interactive(void) {
             target < 39 ? target + 1 : 39;  // +3 has 40 cylinders numbered 0-39
         break;
       case 'Q':
-        plus3_motor(0);
+        plus3_motor_off();
         return;
       default:
         break;
@@ -375,7 +456,7 @@ static void test_read_id(int interactive) {
   printf("\n*** TEST: Read ID (0x0A) ***\n");
   printf("Reads an ID field on the current track. Requires a readable disk.\n");
 
-  plus3_motor(1);
+  plus3_motor_on();
 
   /* Try to get to track 0 first */
   cmd_recalibrate(FDC_DRIVE);
@@ -392,7 +473,7 @@ static void test_read_id(int interactive) {
   results.read_id_pass = ok;
   printf("  %s\n", ok ? "PASS" : "FAIL");
 
-  plus3_motor(0);
+  plus3_motor_off();
   press_any_key(interactive);
 }
 
@@ -495,7 +576,7 @@ int main(void) {
         printf("Results cleared.\n");
         break;
       case 'Q':
-        plus3_motor(0);
+        plus3_motor_off();
         printf("Exiting...\n");
         return 0;
       default:
