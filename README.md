@@ -52,6 +52,14 @@ Deploy wrapper (build + artifact check):
 ./deploy.sh
 ```
 
+ZEsarUX smoke test harness:
+
+```sh
+./tools/zesarux_smoketest.py
+```
+
+This starts ZEsarUX in `+3` mode, enables ZRCP on TCP `10000`, smartloads `out/disk_tester.tap`, runs `A` (Run all), reports OCR summary, and then shuts ZEsarUX down.
+
 ### Output
 
 With `-create-app` on `+zx`, z88dk/appmake produces a loadable artefact alongside the binary in `out/` (commonly a `.tap`, depending on your z88dk/appmake setup and options).

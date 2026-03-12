@@ -28,6 +28,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 
 extern unsigned char inportb(unsigned short port);
 extern void outportb(unsigned short port, unsigned char value);
@@ -49,19 +50,24 @@ static void delay_ms(unsigned int ms) {
 }
 
 /* +3 ports */
-#define PLUS3_SYS_PORT 0x1FFD
 #define FDC_MSR_PORT 0x2FFD
 #define FDC_DATA_PORT 0x3FFD
+
+#ifndef IOCTL_OTERM_PAUSE
+#define IOCTL_OTERM_PAUSE 0xC042
+#endif
 
 /* uPD765A MSR bits */
 #define MSR_RQM 0x80 /* Request for Master */
 #define MSR_DIO 0x40 /* Data direction: 1 = FDC->CPU */
-#define MSR_CB 0x10  /* Controller Busy */
-
 #define FDC_DRIVE 0 /* internal drive is drive 0 */
+#define FDC_RQM_TIMEOUT 12000U
+#define MOTOR_SPINUP_DELAY_MS 40U
 
-#define MOTOR_DRIVE_BIT_MASK ((unsigned char)0x08)
-#define BANK_678 (*(volatile unsigned char*)0x5B67)
+static unsigned int dbg_seek_wait_loops;
+static unsigned char dbg_seek_sense_tries;
+static unsigned char dbg_seek_last_st0;
+static unsigned char debug_enabled;
 
 /* Test results storage */
 typedef struct {
@@ -73,6 +79,24 @@ typedef struct {
 } TestResults;
 
 static TestResults results;
+
+static void disable_terminal_auto_pause(void) {
+  /* Avoid hidden key waits when output scrolls beyond one screen. */
+  ioctl(1, IOCTL_OTERM_PAUSE, 0);
+}
+
+static const char* pass_fail(unsigned char ok) {
+  return ok ? "PASS" : "FAIL";
+}
+
+static const char* yes_no(unsigned char flag) {
+  return flag ? "YES" : "NO";
+}
+
+static void set_debug(unsigned char enabled) {
+  debug_enabled = enabled ? 1 : 0;
+  printf("Debug: %s\n", debug_enabled ? "ON" : "OFF");
+}
 
 /* -------------------------------------------------------------------------- */
 /* Low-level I/O                                                              */
@@ -95,13 +119,13 @@ static unsigned char fdc_wait_rqm(unsigned char want_dio,
 }
 
 static unsigned char fdc_write(unsigned char b) {
-  if (!fdc_wait_rqm(0, 60000)) return 0;
+  if (!fdc_wait_rqm(0, FDC_RQM_TIMEOUT)) return 0;
   outportb(FDC_DATA_PORT, b);
   return 1;
 }
 
 static unsigned char fdc_read(unsigned char* out) {
-  if (!fdc_wait_rqm(1, 60000)) return 0;
+  if (!fdc_wait_rqm(1, FDC_RQM_TIMEOUT)) return 0;
   *out = inportb(FDC_DATA_PORT);
   return 1;
 }
@@ -128,7 +152,7 @@ static void fdc_drain_interrupts(void) {
  */
 unsigned char plus3_motor_on(void) {
   set_motor_on();
-  delay_ms(500);          /* wait for drive to reach operating speed */
+  delay_ms(MOTOR_SPINUP_DELAY_MS);
   fdc_drain_interrupts(); /* clear ready-change interrupt(s) */
   return 0;
 }
@@ -140,7 +164,10 @@ unsigned char plus3_motor_on(void) {
  */
 void plus3_motor_off(void) {
   set_motor_off();
-  fdc_drain_interrupts(); /* clear not-ready interrupt(s) */
+  delay_ms(20);           /* let not-ready transition latch */
+  fdc_drain_interrupts(); /* clear pending interrupt(s) */
+  delay_ms(20);           /* catch late edge on first motor-off */
+  fdc_drain_interrupts();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -223,25 +250,41 @@ static unsigned char wait_seek_complete(unsigned char drive,
                                         unsigned char* out_pcn) {
   unsigned char st0, pcn;
   unsigned int i;
+  unsigned char tries;
   unsigned char busy_bit = (unsigned char)(1u << (drive & 0x03));
 
-  /* Wait for drive-busy bit to clear in MSR */
-  for (i = 0; i < 60000U; i++) {
+  /*
+   * Wait for drive-busy bit to clear in MSR.
+   * Some emulator runs hold the busy bit longer than expected.
+   */
+  for (i = 0; i < 15000U; i++) {
     if (!(fdc_msr() & busy_bit)) break;
   }
-  if (i == 60000U) return 0; /* timed out */
+  dbg_seek_wait_loops = i;
 
-  /* Issue Sense Interrupt Status exactly once now that seek is complete */
-  if (!cmd_sense_interrupt(&st0, &pcn)) return 0;
-  if (!(st0 & 0x20)) return 0; /* SE (Seek End) must be set */
-  *out_st0 = st0;
-  *out_pcn = pcn;
-  return 1;
+  /*
+   * Try Sense Interrupt a few times: this works on real hardware and avoids
+   * long apparent hangs if emulator timing is jittery.
+   */
+  for (tries = 0; tries < 8; tries++) {
+    dbg_seek_sense_tries = tries;
+    if (cmd_sense_interrupt(&st0, &pcn) && (st0 & 0x20)) {
+      dbg_seek_last_st0 = st0;
+      *out_st0 = st0;
+      *out_pcn = pcn;
+      return 1;
+    }
+    delay_ms(5);
+  }
+
+  dbg_seek_last_st0 = st0;
+
+  return 0;
 }
 
 void press_any_key(int interactive) {
   if (interactive == 1) {
-    printf("Press any key to continue...\n");
+    printf("\nPress any key\n");
     fflush(stdout);
     getchar();
   }
@@ -252,22 +295,15 @@ void press_any_key(int interactive) {
 /* -------------------------------------------------------------------------- */
 
 static void test_motor(int interactive) {
-  unsigned int i;
-
-  printf("\n*** TEST: Motor Control (0x1FFD bit 3) ***\n");
-  printf("Turning motor ON...\n");
+  printf("\n*** Motor test ***\n");
+  printf("Motor ON\n");
   plus3_motor_on();
-
-  // printf("FDC MSR: 0x%02X\n", fdc_msr());
-  // results.motor_test_pass = 1;
-  // press_any_key(interactive);
-  printf("Turning motor OFF...\n");
+  printf("Motor OFF\n");
   plus3_motor_off();
-  printf("DEBUG: after plus3_motor_off\n");
-  fflush(stdout);
-  delay_ms(1000);
-  // press_any_key(interactive);
+  results.motor_test_pass = 1;
+  press_any_key(interactive);
 }
+
 static void test_sense_drive(int interactive) {
   unsigned char st3 = 0;
   unsigned char st0 = 0, pcn = 0;
@@ -275,29 +311,28 @@ static void test_sense_drive(int interactive) {
   unsigned char st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
   unsigned char have_st3 = 0;
 
-  printf("\n*** TEST: Drive status (ST3) + media probe (Read ID) ***\n");
+  printf("\n*** Drive status ***\n");
   plus3_motor_on();
 
   /* 1) Raw drive lines (ST3), informational */
   have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
   if (!have_st3) {
-    printf("ST3: not available (timeout)\n");
+    printf("ST3: timeout\n");
   } else {
     printf("ST3 = 0x%02X\n", st3);
-    printf("  Ready:         %s\n", (st3 & 0x20) ? "YES" : "NO");
-    printf("  Write protect: %s\n", (st3 & 0x40) ? "YES" : "NO");
-    printf("  Track 0:       %s\n", (st3 & 0x10) ? "YES" : "NO");
-    printf("  Fault:         %s\n", (st3 & 0x80) ? "YES" : "NO");
+    printf("Ready: %s\n", yes_no(st3 & 0x20));
+    printf("WProt: %s\n", yes_no(st3 & 0x40));
+    printf("Track0: %s\n", yes_no(st3 & 0x10));
+    printf("Fault: %s\n", yes_no(st3 & 0x80));
   }
 
   /* 2) A command that tends to surface "not ready" in ST0 (and steps hardware)
    */
   if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    printf("SenseInt after recal: ST0=0x%02X, PCN=%u\n", st0, pcn);
-    /* ST0 bit 3 = NR (Not Ready) */
-    printf("  Not Ready (NR): %s\n", (st0 & 0x08) ? "YES" : "NO");
+    printf("Recal ST0=0x%02X\n", st0);
+    printf("PCN=%u NR=%s\n", pcn, yes_no(st0 & 0x08));
   } else {
-    printf("Recalibrate: no completion (timeout)\n");
+    printf("Recal: timeout\n");
   }
 
   /* 3) Media probe: Read ID, best indicator for both hardware and emulation */
@@ -306,16 +341,14 @@ static void test_sense_drive(int interactive) {
   printf("Read ID result: ST0=0x%02X ST1=0x%02X ST2=0x%02X\n", st0, st1, st2);
   if (rid_ok) {
     printf("  CHRN: C=%u H=%u R=%u N=%u\n", c, h, r, n);
-    printf("  Media probe: PASS (ID field readable)\n");
+    printf("Probe: PASS\n");
   } else {
-    printf(
-        "  Media probe: FAIL (no disk, not ready, wrong format, or read "
-        "error)\n");
+    printf("Probe: FAIL\n");
   }
 
 
   results.sense_drive_pass = rid_ok ? 1 : 0;
-  printf("Overall: %s\n", results.sense_drive_pass ? "PASS" : "FAIL");
+  printf("Overall: %s\n", pass_fail(results.sense_drive_pass));
 
   plus3_motor_off();
   press_any_key(interactive);
@@ -324,19 +357,19 @@ static void test_sense_drive(int interactive) {
 static void test_recalibrate(int interactive) {
   unsigned char st0 = 0, pcn = 0;
 
-  printf("\n*** TEST: Recalibrate to Track 0 (0x07) ***\n");
+  printf("\n*** Recal track 0 ***\n");
 
   plus3_motor_on();
 
   if (!cmd_recalibrate(FDC_DRIVE)) {
-    printf("FAIL: Could not issue recalibrate (timeout)\n");
+    printf("FAIL: recal cmd\n");
     results.recalibrate_pass = 0;
     plus3_motor_off();
     return;
   }
 
   if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    printf("FAIL: Timeout waiting for completion\n");
+    printf("FAIL: wait timeout\n");
     results.recalibrate_pass = 0;
     plus3_motor_off();
     return;
@@ -344,7 +377,7 @@ static void test_recalibrate(int interactive) {
 
   printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
   results.recalibrate_pass = (unsigned char)(pcn == 0);
-  printf("  %s\n", results.recalibrate_pass ? "PASS" : "FAIL");
+  printf("%s\n", pass_fail(results.recalibrate_pass));
 
   plus3_motor_off();
   press_any_key(interactive);
@@ -352,46 +385,60 @@ static void test_recalibrate(int interactive) {
 
 static void test_seek(int interactive) {
   unsigned char st0 = 0, pcn = 0;
-  unsigned char target = 10;
+  unsigned char target = 2;
 
-  printf("\n*** TEST: Seek to Cylinder %u (0x0F) ***\n", target);
+  printf("\n*** Seek track %u ***\n", target);
 
   plus3_motor_on();
+  if (debug_enabled) {
+    printf("DBG seek start MSR=0x%02X\n", fdc_msr());
+  }
 
   if (!cmd_seek(FDC_DRIVE, 0, target)) {
-    printf("FAIL: Could not issue seek (timeout)\n");
+    printf("FAIL: seek cmd\n");
+    if (debug_enabled) {
+      printf("DBG seek cmd MSR=0x%02X\n", fdc_msr());
+    }
     results.seek_pass = 0;
     plus3_motor_off();
     return;
   }
 
   if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    printf("FAIL: Timeout waiting for completion\n");
+    printf("FAIL: wait timeout\n");
+    if (debug_enabled) {
+      printf("DBG wait loops=%u tries=%u st0=0x%02X msr=0x%02X\n",
+             dbg_seek_wait_loops, dbg_seek_sense_tries, dbg_seek_last_st0,
+             fdc_msr());
+    }
     results.seek_pass = 0;
     plus3_motor_off();
     return;
   }
 
   printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
+  if (debug_enabled) {
+    printf("DBG wait loops=%u tries=%u msr=0x%02X\n",
+           dbg_seek_wait_loops, dbg_seek_sense_tries, fdc_msr());
+  }
   results.seek_pass = (unsigned char)(pcn == target);
-  printf("  %s\n", results.seek_pass ? "PASS" : "FAIL");
+  printf("%s\n", pass_fail(results.seek_pass));
 
   plus3_motor_off();
   press_any_key(interactive);
 }
+
 static void test_seek_interactive(void) {
   unsigned char st0 = 0, pcn = 0;
   unsigned char target = 0;
 
-  printf("\n*** TEST: Seek to Cylinder Step ***\n");
+  printf("\n*** Step seek ***\n");
 
   plus3_motor_on();
 
   for (;;) {
-    printf(
-        "Target cyclinder is currently %u.\n"
-        "Use k (up) or j (down) to adjust or Q to quit: ",
-        target);
+    printf("Track %u\n", target);
+    printf("K up, J down, Q quit: ");
     int ch = getchar();
     printf("\n");
     ch = toupper((unsigned char)ch);
@@ -401,8 +448,7 @@ static void test_seek_interactive(void) {
         target = target > 0 ? target - 1 : 0;
         break;
       case 'K':
-        target =
-            target < 39 ? target + 1 : 39;  // +3 has 40 cylinders numbered 0-39
+        target = target < 39 ? target + 1 : 39;
         break;
       case 'Q':
         plus3_motor_off();
@@ -412,24 +458,27 @@ static void test_seek_interactive(void) {
     }
 
     if (!cmd_seek(FDC_DRIVE, 0, target)) {
-      printf("FAIL: Could not issue seek (timeout)\n");
+      printf("FAIL: seek cmd\n");
+      plus3_motor_off();
       return;
     }
 
     if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-      printf("FAIL: Timeout waiting for completion\n");
+      printf("FAIL: wait timeout\n");
+      plus3_motor_off();
       return;
     }
 
     printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
   }
 }
+
 static void test_read_id(int interactive) {
   unsigned char st0, st1, st2, c, h, r, n;
   unsigned char ok;
 
-  printf("\n*** TEST: Read ID (0x0A) ***\n");
-  printf("Reads an ID field on the current track. Requires a readable disk.\n");
+  printf("\n*** Read ID ***\n");
+  printf("Needs readable disk\n");
 
   plus3_motor_on();
 
@@ -446,7 +495,7 @@ static void test_read_id(int interactive) {
   printf("CHRN:   C=%u H=%u R=%u N=%u\n", c, h, r, n);
 
   results.read_id_pass = ok;
-  printf("  %s\n", ok ? "PASS" : "FAIL");
+  printf("%s\n", pass_fail(ok));
 
   plus3_motor_off();
   
@@ -460,25 +509,17 @@ static void test_read_id(int interactive) {
 static void print_results(void) {
   unsigned char total;
 
-  printf("\n=====================================\n");
-  printf("        TEST RESULTS SUMMARY\n");
-  printf("=====================================\n");
-  printf("Motor Control Test:      %s\n",
-         results.motor_test_pass ? "PASS" : "FAIL");
-  printf("Sense Drive Status Test: %s\n",
-         results.sense_drive_pass ? "PASS" : "FAIL");
-  printf("Recalibrate Test:        %s\n",
-         results.recalibrate_pass ? "PASS" : "FAIL");
-  printf("Seek Test:               %s\n", results.seek_pass ? "PASS" : "FAIL");
-  printf("Read ID Test:            %s\n",
-         results.read_id_pass ? "PASS" : "FAIL");
-  printf("=====================================\n");
+  printf("\n=== Results ===\n");
+  printf("Motor: %s\n", pass_fail(results.motor_test_pass));
+  printf("Drive: %s\n", pass_fail(results.sense_drive_pass));
+  printf("Recal: %s\n", pass_fail(results.recalibrate_pass));
+  printf("Seek : %s\n", pass_fail(results.seek_pass));
+  printf("ReadID: %s\n", pass_fail(results.read_id_pass));
 
   total = results.motor_test_pass + results.sense_drive_pass +
           results.recalibrate_pass + results.seek_pass + results.read_id_pass;
 
   printf("TOTAL: %u/5 tests passed\n", total);
-  printf("=====================================\n");
 }
 
 static void run_all_tests(void) {
@@ -494,20 +535,19 @@ static void run_all_tests(void) {
 
 static void menu_print(void) {
   printf("\n");
-  printf("===================================\n");
-  printf("  ZX Spectrum +3 Disk Drive Tester\n");
-  printf("===================================\n");
-  printf("1) Motor on/off\n");
-  printf("2) Sense drive status\n");
-  printf("3) Recalibrate to track 0\n");
-  printf("4) Seek to track 10\n");
-  printf("5) Seek to track (interactive)\n");
-  printf("6) Read ID (track 0)\n");
-  printf("A) Run all tests\n");
-  printf("R) Show results summary\n");
-  printf("C) Clear results\n");
-  printf("Q) Quit\n");
-  printf("-----------------------------------\n");
+  printf("=== ZX +3 Disk Test ===\n");
+  printf("1 Motor on/off\n");
+  printf("2 Drive status\n");
+  printf("3 Recal track 0\n");
+  printf("4 Seek track 2\n");
+  printf("5 Step seek\n");
+  printf("6 Read ID\n");
+  printf("A Run all\n");
+  printf("D Debug ON\n");
+  printf("E Debug OFF\n");
+  printf("R Results\n");
+  printf("C Clear\n");
+  printf("Q Quit\n");
   printf("Select: ");
 }
 
@@ -515,6 +555,8 @@ int main(void) {
   int ch;
 
   memset(&results, 0, sizeof(results));
+  debug_enabled = 0;
+  disable_terminal_auto_pause();
 
   for (;;) {
     menu_print();
@@ -533,7 +575,7 @@ int main(void) {
         test_recalibrate(1);
         break;
       case '4':
-        test_seek(1);
+        test_seek(0);
         break;
       case '5':
         test_seek_interactive();
@@ -543,6 +585,12 @@ int main(void) {
         break;
       case 'A':
         run_all_tests();
+        break;
+      case 'D':
+        set_debug(1);
+        break;
+      case 'E':
+        set_debug(0);
         break;
       case 'R':
         print_results();

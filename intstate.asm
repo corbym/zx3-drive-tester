@@ -7,62 +7,32 @@ PUBLIC _outportb
 
 defc BANK678 = $5B67
 
-SECTION bss_user
-paging_value:           defs 1  ; Paging bits captured at first call
-paging_initialized:     defs 1  ; Flag: 0 = not yet read, 1 = ready
-
-SECTION code_user
-
 ; void set_motor_on(void)
 ; Enable motor (set bit 3), preserving other paging bits.
 
 _set_motor_on:
-        call    init_paging
-        ld      a,(paging_value)
+        ld      a,(BANK678)
         or      $08                 ; set bit 3 (motor on)
-        call    write_1ffd
-        ld      (paging_value),a
-        ret
+        jp      write_1ffd
 
 ; void set_motor_off(void)
 ; Disable motor (clear bit 3), preserving other paging bits.
 
 _set_motor_off:
-        call    init_paging
-        ld      a,(paging_value)
-        and     $F7                 ; clear bit 3 (motor off)
-        call    write_1ffd
-        ld      (paging_value),a
-        ret
-
-; init_paging: capture paging bits once from BANK678.
-init_paging:
-        ld      a,(paging_initialized)
-        or      a
-        ret     nz                  ; already initialized
         ld      a,(BANK678)
-        ld      (paging_value),a
-        ld      a,1
-        ld      (paging_initialized),a
-        ret
+        and     $F7                 ; clear bit 3 (motor off)
+        jp      write_1ffd
 
 ; write_1ffd: write A to port $1FFD and both shadows.
-; Preserves interrupt state: if IFFs were off on entry, they stay off on return.
+; Use explicit DI/EI around write to keep behaviour simple and stable.
 
 write_1ffd:
         push    bc
-        ld      d,a                 ; save value in D
-        ld      a,i                 ; capture IFF2 into P/V flag
-        push    af
         ld      bc,$1FFD
         di
-        ld      a,d                 ; restore value
         ld      (BANK678),a         ; update ROM shadow
         out     (c),a               ; write port $1FFD
-        pop     af
-        jp      po,write_1ffd_no_ei ; P/V=0 means interrupts were off
         ei
-write_1ffd_no_ei:
         pop     bc
         ret
 
