@@ -9,7 +9,7 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10000
 DEFAULT_EMULATOR = Path("/Applications/zesarux.app/Contents/MacOS/zesarux")
-MENU_MARKERS = ("=== ZX +3 Disk Test ===", "1 Motor on/off", "Select:")
+MENU_MARKERS = ("=== ZX +3 Disk Test ===", "1 Motor + drive status", "Select:")
 RESULT_MARKERS = ("=== Results ===", "TOTAL:", "Press any key")
 
 
@@ -20,20 +20,27 @@ class ZrcpClient:
         self.timeout = timeout
 
     def command(self, command: str) -> str:
-        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-            sock.settimeout(self.timeout)
-            payload = (command.rstrip("\n") + "\n").encode("ascii", "replace")
-            sock.sendall(payload)
-            chunks = []
-            while True:
-                try:
-                    data = sock.recv(4096)
-                except socket.timeout:
-                    break
-                if not data:
-                    break
-                chunks.append(data)
-            return b"".join(chunks).decode("utf-8", "replace")
+        last_error = None
+        for _ in range(2):
+            try:
+                with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                    sock.settimeout(self.timeout)
+                    payload = (command.rstrip("\n") + "\n").encode("ascii", "replace")
+                    sock.sendall(payload)
+                    chunks = []
+                    while True:
+                        try:
+                            data = sock.recv(4096)
+                        except socket.timeout:
+                            break
+                        if not data:
+                            break
+                        chunks.append(data)
+                    return b"".join(chunks).decode("utf-8", "replace")
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                last_error = exc
+                time.sleep(0.1)
+        raise RuntimeError(f"ZRCP command failed after retry: {last_error}")
 
     def ocr(self) -> str:
         return self.command("get-ocr")
@@ -148,8 +155,7 @@ def leave_press_any_key_prompt(
     key_delay_ms: int,
     ocr_poll_s: float,
 ) -> str:
-    # getchar() on this target can behave line-buffered, so send key+Enter.
-    for seq in ("32 13", "88 13", "13"):
+    for seq in ("32", "88", "13"):
         client.command(f"send-keys-ascii {key_delay_ms} {seq}")
         try:
             return wait_for_ocr(client, MENU_MARKERS, timeout, interval=ocr_poll_s)
@@ -167,13 +173,40 @@ def set_debug_mode(
 ) -> None:
     # Menu uses D=debug on, E=debug off.
     if mode == "on":
-        client.command(f"send-keys-ascii {key_delay_ms} 68 13")
+        client.command(f"send-keys-ascii {key_delay_ms} 68")
     elif mode == "off":
-        client.command(f"send-keys-ascii {key_delay_ms} 69 13")
+        client.command(f"send-keys-ascii {key_delay_ms} 69")
     else:
         return
 
     wait_for_ocr(client, MENU_MARKERS, timeout, interval=ocr_poll_s)
+
+
+def assert_no_unknown_option(text: str, where: str) -> None:
+    if "Unknown option" in text:
+        raise RuntimeError(f"Unexpected 'Unknown option' seen {where}")
+
+
+def run_single_test_and_return(
+    client: ZrcpClient,
+    test_key: int,
+    wait_markers: tuple[str, ...],
+    key_delay_ms: int,
+    run_timeout: float,
+    menu_return_timeout: float,
+    ocr_poll_s: float,
+) -> str:
+    client.command(f"send-keys-ascii {key_delay_ms} {test_key}")
+    test_text = wait_for_ocr(client, wait_markers, run_timeout, interval=ocr_poll_s)
+    returned_menu_text = leave_press_any_key_prompt(
+        client,
+        menu_return_timeout,
+        key_delay_ms,
+        ocr_poll_s,
+    )
+    clean_menu = clean_response(returned_menu_text)
+    assert_no_unknown_option(clean_menu, "after returning to menu")
+    return test_text
 
 
 def build_project(repo_root: Path) -> None:
@@ -314,7 +347,28 @@ def main() -> int:
             ocr_poll_s,
         )
 
-        client.command(f"send-keys-ascii {key_delay_ms} 65 13")
+        # Verify single-key menu interactions and menu return path.
+        run_single_test_and_return(
+            client,
+            49,  # '1'
+            ("*** Motor + drive status ***", "Press any key"),
+            key_delay_ms,
+            args.run_timeout,
+            args.menu_return_timeout,
+            ocr_poll_s,
+        )
+        run_single_test_and_return(
+            client,
+            51,  # '3'
+            ("seek track 2", "Press any key"),
+            key_delay_ms,
+            args.run_timeout,
+            args.menu_return_timeout,
+            ocr_poll_s,
+        )
+
+        # Full run-all from menu key only (no Enter).
+        client.command(f"send-keys-ascii {key_delay_ms} 65")
         results_text, snapshots = wait_for_results_with_snapshots(
             client,
             args.run_timeout,
@@ -330,6 +384,8 @@ def main() -> int:
 
         cleaned_results = clean_response(results_text)
         cleaned_menu = clean_response(returned_menu_text)
+        assert_no_unknown_option(cleaned_results, "in run-all output")
+        assert_no_unknown_option(cleaned_menu, "after run-all")
 
         summary_lines = [line for line in cleaned_results.splitlines() if line.startswith(("Motor:", "Drive:", "Recal:", "Seek", "ReadID:", "TOTAL:"))]
 

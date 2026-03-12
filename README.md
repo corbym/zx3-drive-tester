@@ -6,13 +6,13 @@ A low-level ZX Spectrum +3 floppy drive test utility written in C and built with
 
 The program exposes a menu of low-level checks and tests:
 
-- **Motor on/off** – Control via +3 system control port `0x1FFD` (bit 3)
-- **Drive status** – Read drive status lines (ST3) and probe media presence
-- **Recalibrate** – Seek to track 0 and report completion
-- **Seek** – Seek to target track and verify position
+- **Motor + drive status** – Combined motor control and ST3 status check
+- **Drive probe (Read ID)** – Probe media and report controller status bytes
+- **Recal + seek track 2** – Combined track-0 recalibrate then seek verification
 - **Read ID** – Read sector ID from track 0 (requires readable disk)
 - **Run all** – Execute all tests in sequence and summarize results
 - **Debug mode** – Enable/disable verbose telemetry output (motor control, seek status, timeouts)
+- **Single-key UI** – Menu and prompts use direct keypresses (no Enter required)
 
 ## Hardware & I/O Ports
 
@@ -91,10 +91,18 @@ The harness will:
 1. Build the project
 2. Start ZEsarUX in +3 mode
 3. Load the TAP file
-4. Set debug mode if requested
-5. Run all tests (`A` key)
-6. Capture and display results via OCR
-7. Clean up and exit
+4. Validate single-key menu interactions on individual tests
+5. Check for menu-return regressions (including stray `Unknown option`)
+6. Set debug mode if requested
+7. Run all tests (`A` key)
+8. Capture and display results via OCR
+9. Clean up and exit
+
+## Read ID Result Notes
+
+- `CHRN` is only meaningful when Read ID succeeds.
+- On failure, the program now prints `CHRN: (invalid: Read ID failed)` and a reason decoded from ST1/ST2.
+- Example: `ST1=0x01` means missing ID address mark, which usually indicates unreadable media or a drive/read-path fault.
 
 ## Debug Mode
 
@@ -108,7 +116,7 @@ Disable with the `E` key.
 ## Notes
 
 - **Emulator variability**: Some emulators don't accurately model all drive signal lines (write-protect, ready status, etc.). The program works around this by using disk-touching probes (like Read ID) as more reliable indicators than status-register bits alone.
-- **Real hardware timing**: Timings are calibrated to work on both real hardware (~3.5 MHz) and emulators running at fast CPU speeds (100–600% emulation speed).
+- **Real hardware timing**: Spin-up and seek polling/retry timings are tuned conservatively for older real +3 drives while remaining stable in emulator runs.
 - **Interrupt handling**: The program uses IM 1 (single interrupt handler at `$0038`) and disables interrupts during critical I/O sequences to avoid race conditions.
 
 ## Files

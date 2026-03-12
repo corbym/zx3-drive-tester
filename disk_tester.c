@@ -66,12 +66,15 @@ static void delay_ms(unsigned int ms) {
 #define MSR_DIO 0x40 /* Data direction: 1 = FDC->CPU */
 #define FDC_DRIVE 0 /* internal drive is drive 0 */
 #define FDC_RQM_TIMEOUT 20000U
+#define SEEK_BUSY_WAIT_POLLS 20000U
+#define SEEK_SENSE_RETRIES 12U
+#define SEEK_SENSE_RETRY_DELAY_MS 8U
+#define MOTOR_OFF_SETTLE_MS 35U
 /*
- * Real +3 drive needs ~300-500 ms at operating speed.
- * delay_ms(500) = ~180 ms on emulator (600%/21 MHz) and ~1 s on real 3.5 MHz
- * hardware, which is ample for both paths.
+ * Real +3 drives vary with age; a slightly longer spin-up improves reliability
+ * on older mechanics without affecting emulator runs materially.
  */
-#define MOTOR_SPINUP_DELAY_MS 500U
+#define MOTOR_SPINUP_DELAY_MS 650U
 
 static unsigned int dbg_seek_wait_loops;
 static unsigned char dbg_seek_sense_tries;
@@ -120,6 +123,60 @@ static const char* pass_fail(unsigned char ok) {
 
 static const char* yes_no(unsigned char flag) {
   return flag ? "YES" : "NO";
+}
+
+static const char* read_id_failure_reason(unsigned char st1, unsigned char st2) {
+  if (st1 & 0x01) return "Missing ID address mark";
+  if (st1 & 0x02) return "Write protect";
+  if (st1 & 0x04) return "No data";
+  if (st1 & 0x10) return "Overrun";
+  if (st1 & 0x20) return "CRC error";
+  if (st1 & 0x80) return "End of cylinder";
+  if (st2 & 0x01) return "Missing data address mark";
+  if (st2 & 0x02) return "Bad cylinder";
+  if (st2 & 0x04) return "Scan not satisfied";
+  if (st2 & 0x08) return "Scan equal hit";
+  if (st2 & 0x10) return "Wrong cylinder";
+  if (st2 & 0x20) return "CRC in data field";
+  if (st2 & 0x40) return "Control mark";
+  return "Unspecified controller/media error";
+}
+
+typedef struct {
+  unsigned short row_port;
+  unsigned char bit_mask;
+  char key;
+} KeyMap;
+
+static const KeyMap keymap[] = {
+    {0xF7FE, 0x01, '1'}, {0xF7FE, 0x02, '2'}, {0xF7FE, 0x04, '3'},
+    {0xF7FE, 0x08, '4'}, {0xF7FE, 0x10, '5'}, {0xEFFE, 0x10, '6'},
+    {0xFDFE, 0x01, 'A'}, {0x7FFE, 0x08, 'C'}, {0xFDFE, 0x04, 'D'},
+    {0xFBFE, 0x04, 'E'}, {0xBFFE, 0x08, 'J'}, {0xBFFE, 0x04, 'K'},
+    {0xEFFE, 0x01, '0'}, {0xFBFE, 0x01, 'Q'}, {0xFBFE, 0x08, 'R'},
+    {0x7FFE, 0x01, ' '}, {0xBFFE, 0x01, '\n'}};
+
+static unsigned char any_mapped_key_down(void) {
+  unsigned int i;
+  for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
+    if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) return 1;
+  }
+  return 0;
+}
+
+static int read_key_blocking(void) {
+  unsigned int i;
+
+  for (;;) {
+    for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
+      if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) {
+        char key = keymap[i].key;
+        while (any_mapped_key_down()) {
+        }
+        return key;
+      }
+    }
+  }
 }
 
 static void set_debug(unsigned char enabled) {
@@ -196,9 +253,9 @@ unsigned char plus3_motor_on(void) {
  */
 void plus3_motor_off(void) {
   set_motor_off();
-  delay_ms(20);           /* let not-ready transition latch */
+  delay_ms(MOTOR_OFF_SETTLE_MS);  /* let not-ready transition latch */
   fdc_drain_interrupts(); /* clear pending interrupt(s) */
-  delay_ms(20);           /* catch late edge on first motor-off */
+  delay_ms(MOTOR_OFF_SETTLE_MS);  /* catch late edge on first motor-off */
   fdc_drain_interrupts();
 }
 
@@ -289,7 +346,7 @@ static unsigned char wait_seek_complete(unsigned char drive,
    * Wait for drive-busy bit to clear in MSR.
    * Some emulator runs hold the busy bit longer than expected.
    */
-  for (i = 0; i < 15000U; i++) {
+  for (i = 0; i < SEEK_BUSY_WAIT_POLLS; i++) {
     if (!(fdc_msr() & busy_bit)) break;
   }
   dbg_seek_wait_loops = i;
@@ -298,7 +355,7 @@ static unsigned char wait_seek_complete(unsigned char drive,
    * Try Sense Interrupt a few times: this works on real hardware and avoids
    * long apparent hangs if emulator timing is jittery.
    */
-  for (tries = 0; tries < 8; tries++) {
+  for (tries = 0; tries < SEEK_SENSE_RETRIES; tries++) {
     dbg_seek_sense_tries = tries;
     if (cmd_sense_interrupt(&st0, &pcn) && (st0 & 0x20)) {
       dbg_seek_last_st0 = st0;
@@ -306,7 +363,7 @@ static unsigned char wait_seek_complete(unsigned char drive,
       *out_pcn = pcn;
       return 1;
     }
-    delay_ms(5);
+    delay_ms(SEEK_SENSE_RETRY_DELAY_MS);
   }
 
   dbg_seek_last_st0 = st0;
@@ -318,7 +375,7 @@ void press_any_key(int interactive) {
   if (interactive == 1) {
     printf("\nPress any key\n");
     fflush(stdout);
-    getchar();
+    read_key_blocking();
   }
 }
 
@@ -326,17 +383,34 @@ void press_any_key(int interactive) {
 /* Tests                                                                      */
 /* -------------------------------------------------------------------------- */
 
-static void test_motor(int interactive) {
-  printf("\n*** Motor test ***\n");
+static void test_motor_and_drive_status(int interactive) {
+  unsigned char st3 = 0;
+  unsigned char have_st3;
+
+  printf("\n*** Motor + drive status ***\n");
   printf("Motor ON\n");
   plus3_motor_on();
+
+  have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
+  if (!have_st3) {
+    printf("ST3: timeout\n");
+    results.sense_drive_pass = 0;
+  } else {
+    printf("ST3 = 0x%02X\n", st3);
+    printf("Ready: %s\n", yes_no(st3 & 0x20));
+    printf("WProt: %s\n", yes_no(st3 & 0x40));
+    printf("Track0: %s\n", yes_no(st3 & 0x10));
+    printf("Fault: %s\n", yes_no(st3 & 0x80));
+    results.sense_drive_pass = 1;
+  }
+
   printf("Motor OFF\n");
   plus3_motor_off();
   results.motor_test_pass = 1;
   press_any_key(interactive);
 }
 
-static void test_sense_drive(int interactive) {
+static void test_read_id_probe(void) {
   unsigned char st3 = 0;
   unsigned char st0 = 0, pcn = 0;
   unsigned char rid_ok = 0;
@@ -383,13 +457,15 @@ static void test_sense_drive(int interactive) {
   printf("Overall: %s\n", pass_fail(results.sense_drive_pass));
 
   plus3_motor_off();
-  press_any_key(interactive);
 }
 
-static void test_recalibrate(int interactive) {
+static void test_recal_seek_track2(int interactive) {
   unsigned char st0 = 0, pcn = 0;
+  unsigned char target = 2;
+  unsigned char recal_ok = 0;
+  unsigned char seek_ok = 0;
 
-  printf("\n*** Recal track 0 ***\n");
+  printf("\n*** Recal track 0 + seek track %u ***\n", target);
 
   plus3_motor_on();
 
@@ -408,20 +484,8 @@ static void test_recalibrate(int interactive) {
   }
 
   printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
-  results.recalibrate_pass = (unsigned char)(pcn == 0);
-  printf("%s\n", pass_fail(results.recalibrate_pass));
+  recal_ok = (unsigned char)(pcn == 0);
 
-  plus3_motor_off();
-  press_any_key(interactive);
-}
-
-static void test_seek(int interactive) {
-  unsigned char st0 = 0, pcn = 0;
-  unsigned char target = 2;
-
-  printf("\n*** Seek track %u ***\n", target);
-
-  plus3_motor_on();
   if (debug_enabled) {
     printf("DBG seek start MSR=0x%02X\n", fdc_msr());
   }
@@ -453,8 +517,12 @@ static void test_seek(int interactive) {
     printf("DBG wait loops=%u tries=%u msr=0x%02X\n",
            dbg_seek_wait_loops, dbg_seek_sense_tries, fdc_msr());
   }
-  results.seek_pass = (unsigned char)(pcn == target);
-  printf("%s\n", pass_fail(results.seek_pass));
+  seek_ok = (unsigned char)(pcn == target);
+
+  results.recalibrate_pass = recal_ok;
+  results.seek_pass = seek_ok;
+  printf("Recal: %s\n", pass_fail(results.recalibrate_pass));
+  printf("Seek : %s\n", pass_fail(results.seek_pass));
 
   plus3_motor_off();
   press_any_key(interactive);
@@ -471,7 +539,7 @@ static void test_seek_interactive(void) {
   for (;;) {
     printf("Track %u\n", target);
     printf("K up, J down, Q quit: ");
-    int ch = getchar();
+    int ch = read_key_blocking();
     printf("\n");
     ch = toupper((unsigned char)ch);
 
@@ -506,7 +574,7 @@ static void test_seek_interactive(void) {
 }
 
 static void test_read_id(int interactive) {
-  unsigned char st0, st1, st2, c, h, r, n;
+  unsigned char st0 = 0, st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
   unsigned char ok;
 
   printf("\n*** Read ID ***\n");
@@ -524,7 +592,12 @@ static void test_read_id(int interactive) {
   ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
 
   printf("Result: ST0=0x%02X ST1=0x%02X ST2=0x%02X\n", st0, st1, st2);
-  printf("CHRN:   C=%u H=%u R=%u N=%u\n", c, h, r, n);
+  if (ok) {
+    printf("CHRN:   C=%u H=%u R=%u N=%u\n", c, h, r, n);
+  } else {
+    printf("CHRN:   (invalid: Read ID failed)\n");
+    printf("Reason: %s\n", read_id_failure_reason(st1, st2));
+  }
 
   results.read_id_pass = ok;
   printf("%s\n", pass_fail(ok));
@@ -556,10 +629,8 @@ static void print_results(void) {
 
 static void run_all_tests(void) {
   memset(&results, 0, sizeof(results));
-  test_motor(0);
-  test_sense_drive(0);
-  test_recalibrate(0);
-  test_seek(0);
+  test_motor_and_drive_status(0);
+  test_recal_seek_track2(0);
   test_read_id(0);
   print_results();
   press_any_key(1);
@@ -568,12 +639,11 @@ static void run_all_tests(void) {
 static void menu_print(void) {
   printf("\n");
   printf("=== ZX +3 Disk Test ===\n");
-  printf("1 Motor on/off\n");
-  printf("2 Drive status\n");
-  printf("3 Recal track 0\n");
-  printf("4 Seek track 2\n");
-  printf("5 Step seek\n");
-  printf("6 Read ID\n");
+  printf("1 Motor + drive status\n");
+  printf("2 Drive probe (Read ID)\n");
+  printf("3 Recal track 0 + seek track 2\n");
+  printf("4 Step seek\n");
+  printf("5 Read ID\n");
   printf("A Run all\n");
   printf("D Debug ON\n");
   printf("E Debug OFF\n");
@@ -603,27 +673,25 @@ int main(void) {
 
   for (;;) {
     menu_print();
-    ch = getchar();
+    ch = read_key_blocking();
     printf("\n");
     ch = toupper((unsigned char)ch);
 
     switch (ch) {
       case '1':
-        test_motor(1);
+        test_motor_and_drive_status(1);
         break;
       case '2':
-        test_sense_drive(1);
+        test_read_id_probe();
+        press_any_key(1);
         break;
       case '3':
-        test_recalibrate(1);
+        test_recal_seek_track2(1);
         break;
       case '4':
-        test_seek(0);
-        break;
-      case '5':
         test_seek_interactive();
         break;
-      case '6':
+      case '5':
         test_read_id(1);
         break;
       case 'A':
