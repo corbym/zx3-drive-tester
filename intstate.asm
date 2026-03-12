@@ -27,8 +27,6 @@ _set_motor_off:
 ; write_1ffd: write A to port $1FFD and update the BANK678 shadow.
 ; Caller is responsible for computing the correct value; this routine
 ; only provides the DI/EI bracket for the atomic read-modify-write.
-; Do NOT mask A here — bits 1-2 (ROM-bank select) must be preserved
-; or the character-font ROM ($3D00 in ROM3) will appear corrupt.
 write_1ffd:
         push    bc
         ld      bc,$1FFD

@@ -78,19 +78,23 @@ static unsigned char dbg_seek_sense_tries;
 static unsigned char dbg_seek_last_st0;
 static unsigned char debug_enabled;
 /*
- * Raw value of BANK678 ($5B67) captured before any write to port $1FFD.
- * Printed in debug mode so DivMMC paging side-effects are visible.
+ * Captured at startup before any paging changes, for debug visibility.
+ * Shows the state DivMMC left the system in.
  */
 static unsigned char startup_bank678;
 
 /*
- * ROM font captured before any port $1FFD write.
- * DivMMC leaves $5B67 (BANK678 shadow) stale: our set_motor_off() then writes
- * that stale value to $1FFD, clearing bit 2 and switching ROM from the 48K
- * BASIC ROM (font at $3D00) to a +3 ROM that doesn't have the font there.
- * We copy the 1 KB from $3C00-$3FFF (=128 chars x 8 bytes, base offset
- * matching z88dk's CHARS pointer convention) into RAM before any paging
- * change, then redirect the z88dk terminal driver to use that RAM copy.
+ * Character font buffer captured at startup before ROM paging is modified.
+ *
+ * Problem: DivMMC loads the program with the 48K BASIC ROM active (containing
+ * the character font at $3D00). z88dk's output_char_32 driver uses font base
+ * $3C00. When set_motor_off() writes the stale BANK678 shadow to $1FFD, it
+ * clears bit 2 and switches the ROM bank away from the 48K BASIC ROM,
+ * pointing address $3D00 to wrong data and corrupting all text output.
+ *
+ * Solution: Copy the 1 KB font ($3C00-$3FFF) to RAM at program start, then
+ * redirect z88dk's terminal driver to use the RAM copy via IOCTL_OTERM_FONT.
+ * Character rendering is then independent of any ROM paging changes.
  */
 static unsigned char font_ram[1024];
 
@@ -582,28 +586,15 @@ static void menu_print(void) {
 int main(void) {
   int ch;
 
-  /*
-   * Capture ROM font FIRST, before any write to port $1FFD that might change
-   * the ROM bank.  z88dk's output_char_32 driver reads glyphs from $3C00+
-   * (the 48K Spectrum ROM font base).  DivMMC leaves BANK678 ($5B67) stale
-   * so the immediately following set_motor_off() would write 0x00 to $1FFD,
-   * clearing bit 2 and switching away from the 48K ROM.  By copying the font
-   * to RAM here and redirecting the terminal driver we make rendering
-   * independent of ROM paging for the rest of the program.
-   */
+  /* Fix DivMMC font corruption: copy ROM font to RAM before ROM paging changes.
+     See font_ram comment for details. Must run BEFORE set_motor_off(). */
   memcpy(font_ram, (const void *)0x3C00, sizeof(font_ram));
   ioctl(1, IOCTL_OTERM_FONT, font_ram);
 
-  /*
-   * Snapshot the paging shadow BEFORE we write to port 0x1FFD, so debug
-   * mode can show us what state a DivMMC loader (or anything else) left.
-   */
+  /* Capture paging state at startup for debug output. */
   startup_bank678 = *(volatile unsigned char *)0x5B67;
 
-  /*
-   * Force port 0x1FFD to a known-safe state immediately: motor off, no
-   * special paging mode active.
-   */
+  /* Initialize motor and paging to safe defaults. */
   set_motor_off();
 
   memset(&results, 0, sizeof(results));
