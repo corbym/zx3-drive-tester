@@ -13,6 +13,7 @@ The program exposes a menu of low-level checks and tests:
 - **Run all** – Execute all tests in sequence and summarize results
 - **Debug mode** – Enable/disable verbose telemetry output (motor control, seek status, timeouts)
 - **Single-key UI** – Menu and prompts use direct keypresses (no Enter required)
+- **Retry loops** – Interactive seek and Read ID checks repeat until `X` (or BREAK) is pressed
 
 ## Hardware & I/O Ports
 

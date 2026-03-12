@@ -14,6 +14,10 @@
         "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 120 --no-build$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 120$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

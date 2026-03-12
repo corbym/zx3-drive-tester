@@ -195,15 +195,25 @@ def run_single_test_and_return(
     run_timeout: float,
     menu_return_timeout: float,
     ocr_poll_s: float,
+    exit_key: int | None = None,
 ) -> str:
     client.command(f"send-keys-ascii {key_delay_ms} {test_key}")
     test_text = wait_for_ocr(client, wait_markers, run_timeout, interval=ocr_poll_s)
-    returned_menu_text = leave_press_any_key_prompt(
-        client,
-        menu_return_timeout,
-        key_delay_ms,
-        ocr_poll_s,
-    )
+    if exit_key is None:
+        returned_menu_text = leave_press_any_key_prompt(
+            client,
+            menu_return_timeout,
+            key_delay_ms,
+            ocr_poll_s,
+        )
+    else:
+        client.command(f"send-keys-ascii {key_delay_ms} {exit_key}")
+        returned_menu_text = wait_for_ocr(
+            client,
+            MENU_MARKERS,
+            menu_return_timeout,
+            interval=ocr_poll_s,
+        )
     clean_menu = clean_response(returned_menu_text)
     assert_no_unknown_option(clean_menu, "after returning to menu")
     return test_text
@@ -360,11 +370,12 @@ def main() -> int:
         run_single_test_and_return(
             client,
             51,  # '3'
-            ("seek track 2", "Press any key"),
+            ("seek track 2", "Press X or BREAK to return"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
             ocr_poll_s,
+            exit_key=88,  # 'X'
         )
 
         # Full run-all from menu key only (no Enter).

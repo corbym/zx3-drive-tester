@@ -152,9 +152,16 @@ static const KeyMap keymap[] = {
     {0xF7FE, 0x01, '1'}, {0xF7FE, 0x02, '2'}, {0xF7FE, 0x04, '3'},
     {0xF7FE, 0x08, '4'}, {0xF7FE, 0x10, '5'}, {0xEFFE, 0x10, '6'},
     {0xFDFE, 0x01, 'A'}, {0x7FFE, 0x08, 'C'}, {0xFDFE, 0x04, 'D'},
-    {0xFBFE, 0x04, 'E'}, {0xBFFE, 0x08, 'J'}, {0xBFFE, 0x04, 'K'},
+    {0xFBFE, 0x04, 'E'}, {0xFEFE, 0x04, 'X'}, {0xBFFE, 0x08, 'J'},
+    {0xBFFE, 0x04, 'K'},
     {0xEFFE, 0x01, '0'}, {0xFBFE, 0x01, 'Q'}, {0xFBFE, 0x08, 'R'},
     {0x7FFE, 0x01, ' '}, {0xBFFE, 0x01, '\n'}};
+
+static unsigned char break_pressed(void) {
+  unsigned char caps_shift = (unsigned char)(inportb(0xFEFE) & 0x01);
+  unsigned char space = (unsigned char)(inportb(0x7FFE) & 0x01);
+  return (unsigned char)((caps_shift == 0) && (space == 0));
+}
 
 static unsigned char any_mapped_key_down(void) {
   unsigned int i;
@@ -168,6 +175,12 @@ static int read_key_blocking(void) {
   unsigned int i;
 
   for (;;) {
+    if (break_pressed()) {
+      while (break_pressed()) {
+      }
+      return 27;
+    }
+
     for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
       if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) {
         char key = keymap[i].key;
@@ -177,6 +190,15 @@ static int read_key_blocking(void) {
       }
     }
   }
+}
+
+static unsigned char retry_or_exit(void) {
+  int ch;
+
+  printf("Press X or BREAK to return, any other key to retry\n");
+  fflush(stdout);
+  ch = read_key_blocking();
+  return (unsigned char)((ch == 'X') || (ch == 'x') || (ch == 27));
 }
 
 static void set_debug(unsigned char enabled) {
@@ -464,68 +486,96 @@ static void test_recal_seek_track2(int interactive) {
   unsigned char target = 2;
   unsigned char recal_ok = 0;
   unsigned char seek_ok = 0;
+  unsigned char done = 0;
 
-  printf("\n*** Recal track 0 + seek track %u ***\n", target);
+  while (!done) {
+    printf("\n*** Recal track 0 + seek track %u ***\n", target);
 
-  plus3_motor_on();
+    plus3_motor_on();
 
-  if (!cmd_recalibrate(FDC_DRIVE)) {
-    printf("FAIL: recal cmd\n");
-    results.recalibrate_pass = 0;
-    plus3_motor_off();
-    return;
-  }
-
-  if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    printf("FAIL: wait timeout\n");
-    results.recalibrate_pass = 0;
-    plus3_motor_off();
-    return;
-  }
-
-  printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
-  recal_ok = (unsigned char)(pcn == 0);
-
-  if (debug_enabled) {
-    printf("DBG seek start MSR=0x%02X\n", fdc_msr());
-  }
-
-  if (!cmd_seek(FDC_DRIVE, 0, target)) {
-    printf("FAIL: seek cmd\n");
-    if (debug_enabled) {
-      printf("DBG seek cmd MSR=0x%02X\n", fdc_msr());
+    if (!cmd_recalibrate(FDC_DRIVE)) {
+      printf("FAIL: recal cmd\n");
+      results.recalibrate_pass = 0;
+      results.seek_pass = 0;
+      plus3_motor_off();
+      if (interactive) {
+        done = retry_or_exit();
+        continue;
+      }
+      return;
     }
-    results.seek_pass = 0;
-    plus3_motor_off();
-    return;
-  }
 
-  if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    printf("FAIL: wait timeout\n");
-    if (debug_enabled) {
-      printf("DBG wait loops=%u tries=%u st0=0x%02X msr=0x%02X\n",
-             dbg_seek_wait_loops, dbg_seek_sense_tries, dbg_seek_last_st0,
-             fdc_msr());
+    if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
+      printf("FAIL: wait timeout\n");
+      results.recalibrate_pass = 0;
+      results.seek_pass = 0;
+      plus3_motor_off();
+      if (interactive) {
+        done = retry_or_exit();
+        continue;
+      }
+      return;
     }
-    results.seek_pass = 0;
+
+    printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
+    recal_ok = (unsigned char)(pcn == 0);
+
+    if (debug_enabled) {
+      printf("DBG seek start MSR=0x%02X\n", fdc_msr());
+    }
+
+    if (!cmd_seek(FDC_DRIVE, 0, target)) {
+      printf("FAIL: seek cmd\n");
+      if (debug_enabled) {
+        printf("DBG seek cmd MSR=0x%02X\n", fdc_msr());
+      }
+      results.recalibrate_pass = recal_ok;
+      results.seek_pass = 0;
+      plus3_motor_off();
+      if (interactive) {
+        done = retry_or_exit();
+        continue;
+      }
+      return;
+    }
+
+    if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
+      printf("FAIL: wait timeout\n");
+      if (debug_enabled) {
+        printf("DBG wait loops=%u tries=%u st0=0x%02X msr=0x%02X\n",
+               dbg_seek_wait_loops, dbg_seek_sense_tries, dbg_seek_last_st0,
+               fdc_msr());
+      }
+      results.recalibrate_pass = recal_ok;
+      results.seek_pass = 0;
+      plus3_motor_off();
+      if (interactive) {
+        done = retry_or_exit();
+        continue;
+      }
+      return;
+    }
+
+    printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
+    if (debug_enabled) {
+      printf("DBG wait loops=%u tries=%u msr=0x%02X\n",
+             dbg_seek_wait_loops, dbg_seek_sense_tries, fdc_msr());
+    }
+    seek_ok = (unsigned char)(pcn == target);
+
+    results.recalibrate_pass = recal_ok;
+    results.seek_pass = seek_ok;
+    printf("Recal: %s\n", pass_fail(results.recalibrate_pass));
+    printf("Seek : %s\n", pass_fail(results.seek_pass));
+
     plus3_motor_off();
-    return;
+
+    if (!interactive) {
+      return;
+    }
+
+    done = retry_or_exit();
   }
-
-  printf("SenseInt: ST0=0x%02X, PCN=%u\n", st0, pcn);
-  if (debug_enabled) {
-    printf("DBG wait loops=%u tries=%u msr=0x%02X\n",
-           dbg_seek_wait_loops, dbg_seek_sense_tries, fdc_msr());
-  }
-  seek_ok = (unsigned char)(pcn == target);
-
-  results.recalibrate_pass = recal_ok;
-  results.seek_pass = seek_ok;
-  printf("Recal: %s\n", pass_fail(results.recalibrate_pass));
-  printf("Seek : %s\n", pass_fail(results.seek_pass));
-
-  plus3_motor_off();
-  press_any_key(interactive);
 }
 
 static void test_seek_interactive(void) {
@@ -576,35 +626,42 @@ static void test_seek_interactive(void) {
 static void test_read_id(int interactive) {
   unsigned char st0 = 0, st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
   unsigned char ok;
+  unsigned char done = 0;
 
-  printf("\n*** Read ID ***\n");
-  printf("Needs readable disk\n");
+  while (!done) {
+    printf("\n*** Read ID ***\n");
+    printf("Needs readable disk\n");
 
-  plus3_motor_on();
+    plus3_motor_on();
 
-  /* Try to get to track 0 first */
-  cmd_recalibrate(FDC_DRIVE);
-  {
-    unsigned char t0, tp;
-    wait_seek_complete(FDC_DRIVE, &t0, &tp);
+    /* Try to get to track 0 first */
+    cmd_recalibrate(FDC_DRIVE);
+    {
+      unsigned char t0, tp;
+      wait_seek_complete(FDC_DRIVE, &t0, &tp);
+    }
+
+    ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
+
+    printf("Result: ST0=0x%02X ST1=0x%02X ST2=0x%02X\n", st0, st1, st2);
+    if (ok) {
+      printf("CHRN:   C=%u H=%u R=%u N=%u\n", c, h, r, n);
+    } else {
+      printf("CHRN:   (invalid: Read ID failed)\n");
+      printf("Reason: %s\n", read_id_failure_reason(st1, st2));
+    }
+
+    results.read_id_pass = ok;
+    printf("%s\n", pass_fail(ok));
+
+    plus3_motor_off();
+
+    if (!interactive) {
+      return;
+    }
+
+    done = retry_or_exit();
   }
-
-  ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
-
-  printf("Result: ST0=0x%02X ST1=0x%02X ST2=0x%02X\n", st0, st1, st2);
-  if (ok) {
-    printf("CHRN:   C=%u H=%u R=%u N=%u\n", c, h, r, n);
-  } else {
-    printf("CHRN:   (invalid: Read ID failed)\n");
-    printf("Reason: %s\n", read_id_failure_reason(st1, st2));
-  }
-
-  results.read_id_pass = ok;
-  printf("%s\n", pass_fail(ok));
-
-  plus3_motor_off();
-  
-  press_any_key(interactive);
 }
 
 /* -------------------------------------------------------------------------- */
