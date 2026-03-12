@@ -18,6 +18,26 @@
         "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 120$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 150$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 150 --no-build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 1; pgrep -lf zesarux \\|\\| echo \"No zesarux process running\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 2; \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 180 --no-build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pkill -x zesarux 2>/dev/null; pkill -f \"zesarux\" 2>/dev/null; sleep 1; cd /Users/mattcorby-eaglen/repos/zx3-disk-test && \\./tools/zesarux_smoketest\\.py --machine P340 --run-timeout 180 --no-build$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

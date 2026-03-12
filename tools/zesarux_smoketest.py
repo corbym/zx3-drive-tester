@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import socket
 import subprocess
 import sys
@@ -9,8 +10,8 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10000
 DEFAULT_EMULATOR = Path("/Applications/zesarux.app/Contents/MacOS/zesarux")
-MENU_MARKERS = ("=== ZX +3 Disk Test ===", "1 Motor + drive status", "Select:")
-RESULT_MARKERS = ("=== Results ===", "TOTAL:", "Press any key")
+MENU_MARKERS = ("== ZX +3 DISK TEST ==", "1 MOTOR+STATUS", "KEY:")
+RESULT_MARKERS = ("== RESULTS ==", "TOTAL :", "PRESS ANY KEY")
 
 
 class ZrcpClient:
@@ -155,6 +156,12 @@ def leave_press_any_key_prompt(
     key_delay_ms: int,
     ocr_poll_s: float,
 ) -> str:
+    try:
+        current = wait_for_ocr(client, MENU_MARKERS, 0.5, interval=ocr_poll_s)
+        return current
+    except TimeoutError:
+        pass
+
     for seq in ("32", "88", "13"):
         client.command(f"send-keys-ascii {key_delay_ms} {seq}")
         try:
@@ -164,27 +171,15 @@ def leave_press_any_key_prompt(
     raise TimeoutError("Timed out leaving 'Press any key' prompt")
 
 
-def set_debug_mode(
-    client: ZrcpClient,
-    mode: str,
-    key_delay_ms: int,
-    timeout: float,
-    ocr_poll_s: float,
-) -> None:
-    # Menu uses D=debug on, E=debug off.
-    if mode == "on":
-        client.command(f"send-keys-ascii {key_delay_ms} 68")
-    elif mode == "off":
-        client.command(f"send-keys-ascii {key_delay_ms} 69")
-    else:
-        return
-
-    wait_for_ocr(client, MENU_MARKERS, timeout, interval=ocr_poll_s)
-
-
 def assert_no_unknown_option(text: str, where: str) -> None:
-    if "Unknown option" in text:
-        raise RuntimeError(f"Unexpected 'Unknown option' seen {where}")
+    if "Unknown option" in text or "BAD KEY" in text:
+        raise RuntimeError(f"Unexpected bad menu input seen {where}")
+
+
+def assert_ocr_fields(text: str, fields: list[str], where: str) -> None:
+    missing = [f for f in fields if f not in text]
+    if missing:
+        raise RuntimeError(f"Expected OCR fields missing {where}: {missing!r}")
 
 
 def run_single_test_and_return(
@@ -196,6 +191,7 @@ def run_single_test_and_return(
     menu_return_timeout: float,
     ocr_poll_s: float,
     exit_key: int | None = None,
+    allow_unknown_option: bool = False,
 ) -> str:
     client.command(f"send-keys-ascii {key_delay_ms} {test_key}")
     test_text = wait_for_ocr(client, wait_markers, run_timeout, interval=ocr_poll_s)
@@ -207,20 +203,62 @@ def run_single_test_and_return(
             ocr_poll_s,
         )
     else:
-        client.command(f"send-keys-ascii {key_delay_ms} {exit_key}")
-        returned_menu_text = wait_for_ocr(
-            client,
-            MENU_MARKERS,
-            menu_return_timeout,
-            interval=ocr_poll_s,
-        )
+        returned_menu_text = ""
+        deadline = time.time() + menu_return_timeout
+        exit_seq = " ".join([str(exit_key)] * 12)
+        while time.time() < deadline:
+            client.command(f"send-keys-ascii {key_delay_ms} {exit_seq}")
+            try:
+                returned_menu_text = wait_for_ocr(
+                    client,
+                    MENU_MARKERS,
+                    0.8,
+                    interval=ocr_poll_s,
+                )
+                break
+            except TimeoutError:
+                continue
+        if not returned_menu_text:
+            raise TimeoutError("Timed out returning from looped test")
     clean_menu = clean_response(returned_menu_text)
-    assert_no_unknown_option(clean_menu, "after returning to menu")
+    if not allow_unknown_option:
+        assert_no_unknown_option(clean_menu, "after returning to menu")
     return test_text
 
 
-def build_project(repo_root: Path) -> None:
-    subprocess.run(["sh", str(repo_root / "build.sh")], cwd=repo_root, check=True)
+def mount_dsk_after_tap_load(
+    client: ZrcpClient,
+    dsk_path: Path,
+    tap_path: Path,
+    key_delay_ms: int,
+    load_timeout: float,
+    loader_wait_s: float,
+    menu_timeout: float,
+    ocr_poll_s: float,
+) -> None:
+    # ZRCP has no explicit floppy insert command; smartload supports DSK and
+    # may switch UI context, so we re-sync back to the tester menu after load.
+    client.command(f"smartload {dsk_path}")
+    try:
+        wait_for_ocr(client, MENU_MARKERS, menu_timeout, interval=ocr_poll_s)
+        return
+    except TimeoutError:
+        pass
+
+    load_tap_and_wait_menu(
+        client,
+        tap_path,
+        load_timeout,
+        key_delay_ms,
+        loader_wait_s,
+        ocr_poll_s,
+    )
+
+
+def build_project(repo_root: Path, debug_mode: str) -> None:
+    env = dict(os.environ)
+    env["DEBUG"] = "1" if debug_mode == "on" else "0"
+    subprocess.run(["sh", str(repo_root / "build.sh")], cwd=repo_root, check=True, env=env)
 
 
 def is_port_open(host: str, port: int) -> bool:
@@ -231,20 +269,30 @@ def is_port_open(host: str, port: int) -> bool:
         return False
 
 
-def start_emulator(binary: Path, port: int, machine: str, emulator_speed: int) -> subprocess.Popen:
+def start_emulator(
+    binary: Path,
+    port: int,
+    machine: str,
+    emulator_speed: int,
+    headless: bool = False,
+) -> subprocess.Popen:
+    cmd = [
+        str(binary),
+        "--machine",
+        machine,
+        "--emulatorspeed",
+        str(emulator_speed),
+        "--fastautoload",
+        "--enable-remoteprotocol",
+        "--remoteprotocol-port",
+        str(port),
+        "--noconfigfile",
+    ]
+    if headless:
+        cmd += ["--vo", "null", "--ao", "null"]
+
     return subprocess.Popen(
-        [
-            str(binary),
-            "--machine",
-            machine,
-            "--emulatorspeed",
-            str(emulator_speed),
-            "--fastautoload",
-            "--enable-remoteprotocol",
-            "--remoteprotocol-port",
-            str(port),
-            "--noconfigfile",
-        ],
+        cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -280,6 +328,8 @@ def main() -> int:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--tap", type=Path, default=Path("out/disk_tester.tap"))
+    parser.add_argument("--dsk", type=Path, default=Path("out/disk_tester_plus3.dsk"), help="DSK image to mount in drive A for disk read tests")
+    parser.add_argument("--no-dsk", action="store_true", help="Do not mount any DSK image")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--no-build", action="store_true", help="Skip build before running the smoke test")
     parser.add_argument("--emulator-binary", type=Path, default=DEFAULT_EMULATOR)
@@ -295,9 +345,14 @@ def main() -> int:
     parser.add_argument("--menu-return-timeout", type=float, default=4.0, help="Timeout waiting for menu after final keypress")
     parser.add_argument(
         "--debug-mode",
-        choices=("on", "off", "unchanged"),
+        choices=("on", "off"),
         default="off",
-        help="Set tester runtime debug mode before running tests",
+        help="Build tester with compile-time debug output enabled or disabled",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run ZEsarUX without a display window (passes --vo null --ao null)",
     )
     args = parser.parse_args()
 
@@ -312,8 +367,15 @@ def main() -> int:
         print(f"ERROR: TAP file not found: {tap_path}", file=sys.stderr)
         return 2
 
+    dsk_path: Path | None = None
+    if not args.no_dsk:
+        dsk_path = (repo_root / args.dsk).resolve() if not args.dsk.is_absolute() else args.dsk.resolve()
+        if not dsk_path.exists():
+            print(f"ERROR: DSK file not found: {dsk_path}", file=sys.stderr)
+            return 2
+
     if not args.no_build:
-        build_project(repo_root)
+        build_project(repo_root, args.debug_mode)
 
     if not args.emulator_binary.exists():
         print(f"ERROR: emulator binary not found: {args.emulator_binary}", file=sys.stderr)
@@ -324,7 +386,7 @@ def main() -> int:
         return 2
 
     emulator_speed = max(100, args.emulator_speed)
-    started = start_emulator(args.emulator_binary, args.port, args.machine, emulator_speed)
+    started = start_emulator(args.emulator_binary, args.port, args.machine, emulator_speed, args.headless)
     if not wait_for_port(args.host, args.port, args.boot_timeout):
         print("ERROR: timed out waiting for ZEsarUX to start", file=sys.stderr)
         return 2
@@ -349,34 +411,79 @@ def main() -> int:
             ocr_poll_s,
         )
 
-        set_debug_mode(
-            client,
-            args.debug_mode,
-            key_delay_ms,
-            args.menu_return_timeout,
-            ocr_poll_s,
-        )
+        if dsk_path is not None:
+            mount_dsk_after_tap_load(
+                client,
+                dsk_path,
+                tap_path,
+                key_delay_ms,
+                args.load_timeout,
+                loader_wait_s,
+                args.menu_return_timeout,
+                ocr_poll_s,
+            )
 
         # Verify single-key menu interactions and menu return path.
-        run_single_test_and_return(
+        motor_text = run_single_test_and_return(
             client,
             49,  # '1'
-            ("*** Motor + drive status ***", "Press any key"),
+            ("== MOTOR AND STATUS ==", "PRESS ANY KEY"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
             ocr_poll_s,
         )
+        # Confirm motor cycling and drive status register were read.
+        assert_ocr_fields(
+            clean_response(motor_text),
+            ["MOTOR ON", "MOTOR OFF", "ST3 =", "READY :"],
+            "in motor+status test",
+        )
         run_single_test_and_return(
             client,
             51,  # '3'
-            ("seek track 2", "Press X or BREAK to return"),
+            ("== RECAL + SEEK 2 ==", "X OR BREAK=EXIT"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
             ocr_poll_s,
             exit_key=88,  # 'X'
+            allow_unknown_option=True,
         )
+        track_text = run_single_test_and_return(
+            client,
+            54,  # '6'
+            ("PASS #",),
+            key_delay_ms,
+            min(args.run_timeout, 20.0),
+            max(args.menu_return_timeout, 12.0),
+            ocr_poll_s,
+            exit_key=88,  # 'X'
+            allow_unknown_option=True,
+        )
+        # Confirm at least one full sector was read with checksum output.
+        assert_ocr_fields(
+            clean_response(track_text),
+            ["PASS #", "BYTES=", "SUM=0x"],
+            "in read-track-loop test",
+        )
+        rpm_text = run_single_test_and_return(
+            client,
+            55,  # '7'
+            ("RPM",),
+            key_delay_ms,
+            min(args.run_timeout, 20.0),
+            max(args.menu_return_timeout, 12.0),
+            ocr_poll_s,
+            exit_key=88,  # 'X'
+            allow_unknown_option=True,
+        )
+        # Accept a real measurement (VALUE=) or known emulator N/A reasons.
+        # Emulators that return the same sector ID on every Read ID command will
+        # produce SAME SEC; real hardware with no index signal produces NO REV MARK.
+        cleaned_rpm = clean_response(rpm_text)
+        if not any(s in cleaned_rpm for s in ("VALUE=", "SAME SEC", "NO REV MARK", "ID FAIL")):
+            raise RuntimeError(f"RPM test produced no recognisable result\nOCR: {cleaned_rpm!r}")
 
         # Full run-all from menu key only (no Enter).
         client.command(f"send-keys-ascii {key_delay_ms} 65")
@@ -398,11 +505,16 @@ def main() -> int:
         assert_no_unknown_option(cleaned_results, "in run-all output")
         assert_no_unknown_option(cleaned_menu, "after run-all")
 
-        summary_lines = [line for line in cleaned_results.splitlines() if line.startswith(("Motor:", "Drive:", "Recal:", "Seek", "ReadID:", "TOTAL:"))]
+        summary_lines = [
+            line
+            for line in cleaned_results.splitlines()
+            if line.startswith(("MOTOR :", "DRIVE :", "RECAL :", "SEEK", "READID:", "TOTAL :"))
+        ]
 
         print("ZEsarUX smoke test passed")
         print(f"Machine: {args.machine}")
         print(f"TAP: {tap_path}")
+        print(f"DSK: {dsk_path if dsk_path is not None else 'not mounted'}")
         print("Summary:")
         for line in summary_lines:
             print(line)

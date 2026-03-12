@@ -10,10 +10,12 @@ The program exposes a menu of low-level checks and tests:
 - **Drive probe (Read ID)** – Probe media and report controller status bytes
 - **Recal + seek track 2** – Combined track-0 recalibrate then seek verification
 - **Read ID** – Read sector ID from track 0 (requires readable disk)
+- **Read track X data loop** – Continuously reads sector data on selected track (`J`/`K` to change track)
+- **Disk RPM checker** – Continuous rotational-speed estimate from repeated ID reads; requires readable sector IDs
 - **Run all** – Execute all tests in sequence and summarize results
-- **Debug mode** – Enable/disable verbose telemetry output (motor control, seek status, timeouts)
+- **Debug build** – Optional compile-time verbose telemetry for harness/debug sessions
 - **Single-key UI** – Menu and prompts use direct keypresses (no Enter required)
-- **Retry loops** – Interactive seek and Read ID checks repeat until `X` (or BREAK) is pressed
+- **Retry loops** – Interactive seek, Read ID, track-data loop, and RPM checker repeat until `X` (or BREAK) is pressed
 
 ## Hardware & I/O Ports
 
@@ -76,12 +78,16 @@ zcc +zx -vn -clib=new -create-app disk_tester.c intstate.asm -o ./out/disk_teste
 ./tools/zesarux_smoketest.py [--debug-mode on|off]
 ```
 
+The harness loads the tester program from the TAP file and mounts a DSK image for disk read tests.
+
 **Options:**
-- `--debug-mode on` – Enable debug output in the tester before running tests
-- `--debug-mode off` – Disable debug output (default)
+- `--debug-mode on` – Build the tester with compile-time debug output enabled
+- `--debug-mode off` – Build the normal tester (default)
 - `--machine P340` – Use ZX +3, 40-track drive (default)
 - `--run-timeout 120` – Maximum seconds to wait for test completion
 - `--no-build` – Skip build and use existing TAP
+- `--dsk out/disk_tester_plus3.dsk` – DSK image mounted in drive A
+- `--no-dsk` – Disable DSK mounting
 
 **Example:**
 ```sh
@@ -92,9 +98,9 @@ The harness will:
 1. Build the project
 2. Start ZEsarUX in +3 mode
 3. Load the TAP file
-4. Validate single-key menu interactions on individual tests
-5. Check for menu-return regressions (including stray `Unknown option`)
-6. Set debug mode if requested
+4. Load the DSK test image for drive tests
+5. Validate single-key menu interactions on individual tests (including loop/exit paths)
+6. Check for menu-return regressions (including stray bad-key output)
 7. Run all tests (`A` key)
 8. Capture and display results via OCR
 9. Clean up and exit
@@ -104,15 +110,14 @@ The harness will:
 - `CHRN` is only meaningful when Read ID succeeds.
 - On failure, the program now prints `CHRN: (invalid: Read ID failed)` and a reason decoded from ST1/ST2.
 - Example: `ST1=0x01` means missing ID address mark, which usually indicates unreadable media or a drive/read-path fault.
+- The RPM checker cannot measure speed if Read ID fails, because it uses repeated sector IDs as its rotation marker.
 
-## Debug Mode
+## Debug Build
 
-Enable debug mode in the interactive menu with the `D` key. When active, the program prints:
+Build with `DEBUG=1 ./build.sh` to enable debug output. In a debug build the program prints:
 - Startup paging state (`DBG startup BANK678=0x...`)
 - Seek operation status (loop counts, sense interrupt retries, MSR/ST0 values)
 - Timeouts and failure details
-
-Disable with the `E` key.
 
 ## Notes
 
