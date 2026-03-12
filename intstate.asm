@@ -13,24 +13,27 @@ defc BANK678 = $5B67
 _set_motor_on:
         ld      a,(BANK678)
         or      $08                 ; set bit 3 (motor on)
-        jp      write_1ffd
+        and     $FE                 ; safety: clear bit 0 (special-paging mode)
+        jp      write_1ffd          ; preserves ROM-select bits 1-2 intact
 
 ; void set_motor_off(void)
 ; Disable motor (clear bit 3), preserving other paging bits.
 
 _set_motor_off:
         ld      a,(BANK678)
-        and     $F7                 ; clear bit 3 (motor off)
-        jp      write_1ffd
+        and     $F6                 ; clear bit 3 (motor off) + bit 0 (special-paging)
+        jp      write_1ffd          ; preserves ROM-select bits 1-2 intact
 
-; write_1ffd: write A to port $1FFD and both shadows.
-; Use explicit DI/EI around write to keep behaviour simple and stable.
-
+; write_1ffd: write A to port $1FFD and update the BANK678 shadow.
+; Caller is responsible for computing the correct value; this routine
+; only provides the DI/EI bracket for the atomic read-modify-write.
+; Do NOT mask A here — bits 1-2 (ROM-bank select) must be preserved
+; or the character-font ROM ($3D00 in ROM3) will appear corrupt.
 write_1ffd:
         push    bc
         ld      bc,$1FFD
         di
-        ld      (BANK678),a         ; update ROM shadow
+        ld      (BANK678),a         ; update ROM shadow before port write
         out     (c),a               ; write port $1FFD
         ei
         pop     bc

@@ -57,17 +57,42 @@ static void delay_ms(unsigned int ms) {
 #define IOCTL_OTERM_PAUSE 0xC042
 #endif
 
+#ifndef IOCTL_OTERM_FONT
+#define IOCTL_OTERM_FONT 0x0802
+#endif
+
 /* uPD765A MSR bits */
 #define MSR_RQM 0x80 /* Request for Master */
 #define MSR_DIO 0x40 /* Data direction: 1 = FDC->CPU */
 #define FDC_DRIVE 0 /* internal drive is drive 0 */
-#define FDC_RQM_TIMEOUT 12000U
-#define MOTOR_SPINUP_DELAY_MS 40U
+#define FDC_RQM_TIMEOUT 20000U
+/*
+ * Real +3 drive needs ~300-500 ms at operating speed.
+ * delay_ms(500) = ~180 ms on emulator (600%/21 MHz) and ~1 s on real 3.5 MHz
+ * hardware, which is ample for both paths.
+ */
+#define MOTOR_SPINUP_DELAY_MS 500U
 
 static unsigned int dbg_seek_wait_loops;
 static unsigned char dbg_seek_sense_tries;
 static unsigned char dbg_seek_last_st0;
 static unsigned char debug_enabled;
+/*
+ * Raw value of BANK678 ($5B67) captured before any write to port $1FFD.
+ * Printed in debug mode so DivMMC paging side-effects are visible.
+ */
+static unsigned char startup_bank678;
+
+/*
+ * ROM font captured before any port $1FFD write.
+ * DivMMC leaves $5B67 (BANK678 shadow) stale: our set_motor_off() then writes
+ * that stale value to $1FFD, clearing bit 2 and switching ROM from the 48K
+ * BASIC ROM (font at $3D00) to a +3 ROM that doesn't have the font there.
+ * We copy the 1 KB from $3C00-$3FFF (=128 chars x 8 bytes, base offset
+ * matching z88dk's CHARS pointer convention) into RAM before any paging
+ * change, then redirect the z88dk terminal driver to use that RAM copy.
+ */
+static unsigned char font_ram[1024];
 
 /* Test results storage */
 typedef struct {
@@ -96,6 +121,9 @@ static const char* yes_no(unsigned char flag) {
 static void set_debug(unsigned char enabled) {
   debug_enabled = enabled ? 1 : 0;
   printf("Debug: %s\n", debug_enabled ? "ON" : "OFF");
+  if (debug_enabled) {
+    printf("DBG startup BANK678=0x%02X\n", startup_bank678);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -553,6 +581,30 @@ static void menu_print(void) {
 
 int main(void) {
   int ch;
+
+  /*
+   * Capture ROM font FIRST, before any write to port $1FFD that might change
+   * the ROM bank.  z88dk's output_char_32 driver reads glyphs from $3C00+
+   * (the 48K Spectrum ROM font base).  DivMMC leaves BANK678 ($5B67) stale
+   * so the immediately following set_motor_off() would write 0x00 to $1FFD,
+   * clearing bit 2 and switching away from the 48K ROM.  By copying the font
+   * to RAM here and redirecting the terminal driver we make rendering
+   * independent of ROM paging for the rest of the program.
+   */
+  memcpy(font_ram, (const void *)0x3C00, sizeof(font_ram));
+  ioctl(1, IOCTL_OTERM_FONT, font_ram);
+
+  /*
+   * Snapshot the paging shadow BEFORE we write to port 0x1FFD, so debug
+   * mode can show us what state a DivMMC loader (or anything else) left.
+   */
+  startup_bank678 = *(volatile unsigned char *)0x5B67;
+
+  /*
+   * Force port 0x1FFD to a known-safe state immediately: motor off, no
+   * special paging mode active.
+   */
+  set_motor_off();
 
   memset(&results, 0, sizeof(results));
   debug_enabled = 0;
