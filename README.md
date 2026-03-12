@@ -145,10 +145,10 @@ docker run --rm -v $(pwd):/workspace zx3-disk-test:latest \
 
 ### GitHub Actions
 
-The repository includes a GitHub Actions workflow (`.github/workflows/smoke-test.yml`) that:
-1. Builds the Docker image
-2. Runs the smoke test on every push and PR
-3. Reports pass/fail status
+The repository includes two GitHub Actions workflows:
+1. `.github/workflows/toolchain-image.yml` builds and publishes a prebuilt toolchain image to GHCR when the Dockerfile changes
+2. `.github/workflows/smoke-test.yml` pulls that prebuilt image for normal CI runs and only falls back to a local build if the image is missing
+3. The smoke test then runs on every push and PR and reports pass/fail status
 
 The workflow uses `--headless` mode to run without a display.
 
