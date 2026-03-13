@@ -363,19 +363,20 @@ def main() -> int:
 
     repo_root = args.repo_root.resolve()
     tap_path = (repo_root / args.tap).resolve() if not args.tap.is_absolute() else args.tap.resolve()
+    dsk_path: Path | None = None
+    if not args.no_dsk:
+        dsk_path = (repo_root / args.dsk).resolve() if not args.dsk.is_absolute() else args.dsk.resolve()
+
+    if not args.no_build:
+        build_project(repo_root, args.debug_mode)
+
     if not tap_path.exists():
         print(f"ERROR: TAP file not found: {tap_path}", file=sys.stderr)
         return 2
 
-    dsk_path: Path | None = None
-    if not args.no_dsk:
-        dsk_path = (repo_root / args.dsk).resolve() if not args.dsk.is_absolute() else args.dsk.resolve()
-        if not dsk_path.exists():
-            print(f"ERROR: DSK file not found: {dsk_path}", file=sys.stderr)
-            return 2
-
-    if not args.no_build:
-        build_project(repo_root, args.debug_mode)
+    if dsk_path is not None and not dsk_path.exists():
+        print(f"ERROR: DSK file not found: {dsk_path}", file=sys.stderr)
+        return 2
 
     if not args.emulator_binary.exists():
         print(f"ERROR: emulator binary not found: {args.emulator_binary}", file=sys.stderr)

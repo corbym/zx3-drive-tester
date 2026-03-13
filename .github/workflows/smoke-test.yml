@@ -54,12 +54,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build project artifacts
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            zx3-disk-test:ci \
+            bash -c "cd /workspace && ./deploy.sh"
+
       - name: Run smoke test
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             zx3-disk-test:ci \
-            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --machine P340 --run-timeout 180 --headless --emulator-binary /usr/local/bin/zesarux"
+            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --run-timeout 180 --headless --emulator-binary /usr/local/bin/zesarux"
 
       - name: Test result summary
         if: success()

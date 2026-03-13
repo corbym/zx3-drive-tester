@@ -40,6 +40,10 @@
             "matchCommandLine": true
         },
         "gh": true,
-        "podman": true
+        "podman": true,
+        "/^python3 -m py_compile tools/zesarux_smoketest\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }
