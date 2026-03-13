@@ -35,10 +35,12 @@ RUN cd /tmp && \
     cd z88dk && \
     chmod +x build.sh && \
     ./build.sh && \
+    make install PREFIX=/opt/z88dk && \
+    test -x /opt/z88dk/bin/zcc && \
     cd /tmp && rm -rf z88dk-src.tgz z88dk
 
 ENV PATH=/opt/z88dk/bin:/usr/local/bin:$PATH
-ENV ZCCCFG=/opt/z88dk/lib/config
+ENV ZCCCFG=/opt/z88dk/share/z88dk/lib/config
 
 # Build ZEsarUX from official GitHub source tag.
 RUN cd /tmp && \
