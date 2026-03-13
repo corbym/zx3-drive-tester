@@ -68,6 +68,17 @@ jobs:
             zx3-disk-test:ci \
             bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --run-timeout 180 --headless --emulator-binary /usr/local/bin/zesarux"
 
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zx3-disk-test-${{ github.sha }}
+          path: |
+            out/disk_tester.tap
+            out/disk_tester_plus3.dsk
+            out/disk_tester.asm
+          if-no-files-found: error
+
       - name: Test result summary
         if: success()
         run: |
