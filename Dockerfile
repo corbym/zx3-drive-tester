@@ -34,7 +34,8 @@ RUN cd /tmp && \
     tar -xzf z88dk-src.tgz && \
     cd z88dk && \
     chmod +x build.sh && \
-    ./build.sh -i /opt/z88dk && \
+    ./build.sh && \
+    make install PREFIX=/opt/z88dk && \
     test -x /opt/z88dk/bin/zcc && \
     cd /tmp && rm -rf z88dk-src.tgz z88dk
 
@@ -55,6 +56,9 @@ RUN cd /tmp && \
 WORKDIR /workspace
 
 # Verify tooling in the final image.
-RUN zcc 2>&1 | grep -q "z88dk" && zesarux --helpall > /dev/null && echo "Toolchain verified"
+RUN /opt/z88dk/bin/zcc 2>&1 | grep -q "z88dk" && \
+    command -v zcc > /dev/null && \
+    zesarux --version > /dev/null && \
+    echo "Toolchain verified"
 
 CMD ["/bin/bash"]
