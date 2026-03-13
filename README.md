@@ -1,5 +1,7 @@
 # zx3-disk-tester
 
+[![Smoke Test](https://github.com/corbym/zx3-disc-check/actions/workflows/smoke-test.yml/badge.svg)](https://github.com/corbym/zx3-disc-check/actions/workflows/smoke-test.yml)
+
 A low-level ZX Spectrum +3 floppy drive test utility written in C and built with **z88dk**. It communicates directly with the internal +3 floppy controller (uPD765A compatible) via dedicated I/O ports and provides an interactive menu for drive diagnostics.
 
 ## Features
