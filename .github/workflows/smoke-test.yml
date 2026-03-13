@@ -76,7 +76,6 @@ jobs:
           path: |
             out/disk_tester.tap
             out/disk_tester_plus3.dsk
-            out/disk_tester.asm
           if-no-files-found: error
 
       - name: Create and push release tag
@@ -112,6 +111,26 @@ jobs:
           git push origin "$next_tag"
           echo "Created and pushed $next_tag"
           echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release with artifacts
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.tag_release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag_release.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets"
+            gh release upload "$TAG" \
+              out/disk_tester.tap \
+              out/disk_tester_plus3.dsk \
+              --clobber
+          else
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --notes "Automated release from commit ${GITHUB_SHA}" \
+              out/disk_tester.tap \
+              out/disk_tester_plus3.dsk
+          fi
 
       - name: Test result summary
         if: success()
