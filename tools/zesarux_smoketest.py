@@ -210,6 +210,12 @@ def assert_ocr_fields(text: str, fields: list[str], where: str) -> None:
         raise RuntimeError(f"Expected OCR fields missing {where}: {missing!r}")
 
 
+def assert_no_ocr_fields(text: str, fields: list[str], where: str) -> None:
+    present = [f for f in fields if f in text]
+    if present:
+        raise RuntimeError(f"Unexpected OCR fields present {where}: {present!r}")
+
+
 def run_single_test_and_return(
     client: ZrcpClient,
     test_key: int,
@@ -595,7 +601,7 @@ def main() -> int:
             ["MOTOR ON", "MOTOR OFF", "ST3 =", "READY :"],
             "in motor+status test",
         )
-        run_single_test_and_return(
+        recal_seek_text = run_single_test_and_return(
             client,
             51,  # '3'
             ("X OR BREAK=EXIT",),
@@ -605,6 +611,17 @@ def main() -> int:
             ocr_poll_s,
             exit_key=88,  # 'X'
             allow_unknown_option=True,
+        )
+        cleaned_recal_seek = clean_response(recal_seek_text)
+        assert_ocr_fields(
+            cleaned_recal_seek,
+            ["SenseInt: ST0=0x", "PCN=0", "PCN=2", "Recal: PASS", "Seek : PASS"],
+            "in recal+seek flow",
+        )
+        assert_no_ocr_fields(
+            cleaned_recal_seek,
+            ["DRIVE NOT READY", "FAIL: recal cmd", "FAIL: seek cmd", "FAIL: wait timeout"],
+            "in recal+seek flow",
         )
         track_text = run_single_test_and_return(
             client,

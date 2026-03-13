@@ -75,6 +75,8 @@ static void delay_ms(unsigned int ms) {
 #define SEEK_BUSY_TIMEOUT_MS 900U
 #define SEEK_SENSE_RETRIES 48U
 #define SEEK_SENSE_RETRY_DELAY_MS 2U
+#define DRIVE_READY_TIMEOUT_MS 500U
+#define DRIVE_READY_POLL_MS 5U
 #define MOTOR_OFF_SETTLE_MS 35U
 #define READ_LOOP_PAUSE_STEPS 4U
 #define READ_LOOP_PAUSE_MS 6U
@@ -501,6 +503,24 @@ static unsigned char cmd_sense_drive_status(unsigned char drive,
   return 1;
 }
 
+static unsigned char wait_drive_ready(unsigned char drive,
+                                      unsigned char head,
+                                      unsigned char* out_st3) {
+  unsigned int waited;
+  unsigned char st3 = 0;
+
+  for (waited = 0; waited < DRIVE_READY_TIMEOUT_MS; waited += DRIVE_READY_POLL_MS) {
+    if (cmd_sense_drive_status(drive, head, &st3) && (st3 & 0x20)) {
+      if (out_st3) *out_st3 = st3;
+      return 1;
+    }
+    delay_ms(DRIVE_READY_POLL_MS);
+  }
+
+  if (out_st3) *out_st3 = st3;
+  return 0;
+}
+
 static unsigned char cmd_recalibrate(unsigned char drive) {
   if (!fdc_write(0x07)) return 0; /* Recalibrate */
   if (!fdc_write(drive & 0x03)) return 0;
@@ -733,6 +753,7 @@ static void test_read_id_probe(void) {
 
 static void test_recal_seek_track2(int interactive) {
   unsigned char st0 = 0, pcn = 0;
+  unsigned char st3 = 0;
   unsigned char target = 2;
   unsigned char recal_ok = 0;
   unsigned char seek_ok = 0;
@@ -742,6 +763,18 @@ static void test_recal_seek_track2(int interactive) {
     printf("\n== RECAL + SEEK %u ==\n", target);
 
     plus3_motor_on();
+
+    if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+      printf("FAIL: DRIVE NOT READY (ST3=0x%02X)\n", st3);
+      results.recalibrate_pass = 0;
+      results.seek_pass = 0;
+      plus3_motor_off();
+      if (interactive) {
+        done = retry_or_exit();
+        continue;
+      }
+      return;
+    }
 
     if (!cmd_recalibrate(FDC_DRIVE)) {
       printf("FAIL: recal cmd\n");
@@ -830,11 +863,18 @@ static void test_recal_seek_track2(int interactive) {
 
 static void test_seek_interactive(void) {
   unsigned char st0 = 0, pcn = 0;
+  unsigned char st3 = 0;
   unsigned char target = 0;
 
   printf("\n== STEP SEEK ==\n");
 
   plus3_motor_on();
+
+  if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+    printf("FAIL: DRIVE NOT READY (ST3=0x%02X)\n", st3);
+    plus3_motor_off();
+    return;
+  }
 
   for (;;) {
     printf("TRACK %u\n", target);
@@ -875,6 +915,7 @@ static void test_seek_interactive(void) {
 
 static void test_read_id(int interactive) {
   unsigned char st0 = 0, st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
+  unsigned char st3 = 0;
   unsigned char ok;
   unsigned char done = 0;
 
@@ -883,6 +924,22 @@ static void test_read_id(int interactive) {
     printf("NEEDS READABLE DISK\n");
 
     plus3_motor_on();
+
+    if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+      printf("READ ID\n");
+      printf("ST0=0x08\n");
+      printf("ST1=0x00\n");
+      printf("ST2=0x00\n");
+      printf("CHRN: INVALID\n");
+      printf("REASON: DRIVE NOT READY (ST3=0x%02X)\n", st3);
+      results.read_id_pass = 0;
+      plus3_motor_off();
+      if (!interactive) {
+        return;
+      }
+      done = retry_or_exit();
+      continue;
+    }
 
     /* Try to get to track 0 first */
     cmd_recalibrate(FDC_DRIVE);
@@ -927,6 +984,7 @@ static void test_read_track_data_loop(void) {
   unsigned char track = 0;
   unsigned char need_seek = 1;
   unsigned char jk_latch = 0;
+  unsigned char st3 = 0;
   unsigned int pass_count = 0;
   unsigned int fail_count = 0;
   unsigned int data_len;
@@ -939,6 +997,12 @@ static void test_read_track_data_loop(void) {
   printf("J/K=TRACK  X/BREAK=EXIT\n");
 
   plus3_motor_on();
+
+  if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+    printf("TRACK LOOP STOP. DRIVE NOT READY ST3=0x%02X\n", st3);
+    plus3_motor_off();
+    return;
+  }
 
   for (;;) {
     if (loop_exit_requested()) break;
@@ -1044,12 +1108,19 @@ static void test_rpm_checker(void) {
   unsigned int pass_count = 0;
   unsigned int fail_count = 0;
   unsigned char seen_other = 0;
+  unsigned char st3 = 0;
   unsigned char i;
 
   printf("\n== DISK RPM CHECK ==\n");
   printf("NEEDS READABLE ID. X/BREAK=EXIT\n");
 
   plus3_motor_on();
+
+  if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+    printf("RPM LOOP STOP. DRIVE NOT READY ST3=0x%02X\n", st3);
+    plus3_motor_off();
+    return;
+  }
 
   for (;;) {
     if (loop_exit_requested()) break;
