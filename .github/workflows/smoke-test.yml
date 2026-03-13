@@ -66,7 +66,14 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             zx3-disk-test:ci \
-            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --run-timeout 180 --headless --emulator-binary /usr/local/bin/zesarux"
+            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --run-timeout 180 --headless --log-ocr --ocr-artifacts-dir out/smoke-artifacts --menu-screenshot out/smoke-artifacts/menu-screen.bmp --emulator-binary /usr/local/bin/zesarux"
+
+      - name: Capture compact menu screenshot
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            zx3-disk-test:ci \
+            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --machine P340 --headless --menu-only --no-dsk --compact-ui on --log-ocr --ocr-artifacts-dir out/smoke-artifacts --menu-screenshot out/smoke-artifacts/menu-screen-compact.bmp --emulator-binary /usr/local/bin/zesarux"
 
       - name: Create and push semver tag
         id: tag_semver
@@ -116,6 +123,7 @@ jobs:
           path: |
             out/disk_tester.tap
             out/disk_tester_plus3.dsk
+            out/smoke-artifacts/**
           if-no-files-found: error
 
       - name: Test result summary

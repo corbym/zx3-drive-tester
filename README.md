@@ -85,11 +85,17 @@ The harness loads the tester program from the TAP file and mounts a DSK image fo
 **Options:**
 - `--debug-mode on` – Build the tester with compile-time debug output enabled
 - `--debug-mode off` – Build the normal tester (default)
+- `--compact-ui on` – Build with compact display font for human viewing
+- `--compact-ui off` – Build with OCR-safe default font (default)
+- `--log-ocr` – Print key OCR captures to stdout for CI/build logs
+- `--ocr-artifacts-dir out/smoke-artifacts` – Write OCR snapshots and text captures
+- `--menu-screenshot out/smoke-artifacts/menu-screen.bmp` – Save menu screenshot (bmp/scr/pbm)
 - `--machine P340` – Use ZX +3, 40-track drive (default)
 - `--run-timeout 120` – Maximum seconds to wait for test completion
 - `--no-build` – Skip build and use existing TAP
 - `--dsk out/disk_tester_plus3.dsk` – DSK image mounted in drive A
 - `--no-dsk` – Disable DSK mounting
+- `--menu-only` – Load to menu, capture artifacts, and exit (for human screenshot review)
 
 **Example:**
 ```sh
@@ -107,6 +113,11 @@ The harness will:
 8. Capture and display results via OCR
 9. Clean up and exit
 
+Notes:
+- `save-screen` via ZRCP supports `bmp`, `scr`, and `pbm` output formats.
+- Default loader wait was reduced to make startup faster while keeping fallback logic.
+- CI captures both a default OCR-safe menu screenshot and a compact-font menu screenshot for human review.
+
 ## Read ID Result Notes
 
 - `CHRN` is only meaningful when Read ID succeeds.
@@ -120,6 +131,12 @@ Build with `DEBUG=1 ./build.sh` to enable debug output. In a debug build the pro
 - Startup paging state (`DBG startup BANK678=0x...`)
 - Seek operation status (loop counts, sense interrupt retries, MSR/ST0 values)
 - Timeouts and failure details
+
+For a denser human-facing font while keeping menu wording unchanged, build with
+`COMPACT_UI=1 ./build.sh`.
+
+For CI and OCR-driven smoke tests, keep `COMPACT_UI=0` (default) to preserve
+stable character recognition.
 
 ## Docker Build & CI
 

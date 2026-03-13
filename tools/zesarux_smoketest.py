@@ -10,8 +10,8 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10000
 DEFAULT_EMULATOR = Path("/Applications/zesarux.app/Contents/MacOS/zesarux")
-MENU_MARKERS = ("== ZX +3 DISK TEST ==", "1 MOTOR+STATUS", "KEY:")
-RESULT_MARKERS = ("== RESULTS ==", "TOTAL :", "PRESS ANY KEY")
+MENU_MARKERS = ("SELECT KEY:",)
+RESULT_MARKERS = ("TEST REPORT CARD", "OVERALL [", "PRESS ANY KEY")
 
 
 class ZrcpClient:
@@ -94,6 +94,34 @@ def snapshot_state(client: ZrcpClient, label: str) -> str:
             parts.append(f"$ {cmd}")
             parts.append(f"ERROR: {exc}")
     return "\n".join(parts)
+
+
+def log_ocr_block(enabled: bool, label: str, text: str, max_lines: int = 20) -> None:
+    if not enabled:
+        return
+    print(f"OCR {label}:")
+    cleaned = clean_response(text)
+    lines = cleaned.splitlines()
+    for line in lines[:max_lines]:
+        print(line)
+    if len(lines) > max_lines:
+        print(f"... ({len(lines) - max_lines} more lines)")
+
+
+def capture_menu_screenshot(client: ZrcpClient, screenshot_path: Path) -> None:
+    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+    if screenshot_path.exists():
+        screenshot_path.unlink()
+
+    client.command(f"save-screen {screenshot_path}")
+
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if screenshot_path.exists() and screenshot_path.stat().st_size > 0:
+            return
+        time.sleep(0.1)
+
+    raise RuntimeError(f"save-screen did not create screenshot: {screenshot_path}")
 
 
 def wait_for_results_with_snapshots(
@@ -193,8 +221,27 @@ def run_single_test_and_return(
     exit_key: int | None = None,
     allow_unknown_option: bool = False,
 ) -> str:
-    client.command(f"send-keys-ascii {key_delay_ms} {test_key}")
-    test_text = wait_for_ocr(client, wait_markers, run_timeout, interval=ocr_poll_s)
+    deadline = time.time() + run_timeout
+    test_text = ""
+    last_send = 0.0
+
+    while time.time() < deadline:
+        now = time.time()
+        if now - last_send >= 0.35:
+            client.command(f"send-keys-ascii {key_delay_ms} {test_key}")
+            last_send = now
+
+        test_text = client.ocr()
+        if all(marker in test_text for marker in wait_markers):
+            break
+
+        time.sleep(ocr_poll_s)
+    else:
+        raise TimeoutError(
+            f"Timed out waiting for test markers after key {test_key}: {wait_markers}\n"
+            f"Last OCR:\n{test_text}"
+        )
+
     if exit_key is None:
         returned_menu_text = leave_press_any_key_prompt(
             client,
@@ -255,9 +302,10 @@ def mount_dsk_after_tap_load(
     )
 
 
-def build_project(repo_root: Path, debug_mode: str) -> None:
+def build_project(repo_root: Path, debug_mode: str, compact_ui: str) -> None:
     env = dict(os.environ)
     env["DEBUG"] = "1" if debug_mode == "on" else "0"
+    env["COMPACT_UI"] = "1" if compact_ui == "on" else "0"
     subprocess.run(["sh", str(repo_root / "build.sh")], cwd=repo_root, check=True, env=env)
 
 
@@ -274,6 +322,8 @@ def start_emulator(
     port: int,
     machine: str,
     emulator_speed: int,
+    video_driver: str | None,
+    zoom: int | None,
     headless: bool = False,
 ) -> subprocess.Popen:
     cmd = [
@@ -290,6 +340,11 @@ def start_emulator(
     ]
     if headless:
         cmd += ["--vo", "null", "--ao", "null"]
+    else:
+        if video_driver:
+            cmd += ["--vo", video_driver]
+        if zoom is not None and zoom > 0:
+            cmd += ["--zoom", str(zoom)]
 
     return subprocess.Popen(
         cmd,
@@ -323,6 +378,14 @@ def stop_emulator(client: ZrcpClient, proc: subprocess.Popen | None) -> None:
         proc.wait(timeout=5)
 
 
+def write_ocr_artifact(artifacts_dir: Path | None, name: str, text: str) -> None:
+    if artifacts_dir is None:
+        return
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    target = artifacts_dir / name
+    target.write_text(clean_response(text), encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a full ZEsarUX +3 smoke test against disk_tester.tap")
     parser.add_argument("--host", default=DEFAULT_HOST)
@@ -336,12 +399,12 @@ def main() -> int:
     parser.add_argument("--machine", default="P340", help="ZEsarUX machine id (e.g. P340, P341, P3S)")
     parser.add_argument("--emulator-speed", type=int, default=600, help="ZEsarUX emulation speed percentage")
     parser.add_argument("--boot-timeout", type=float, default=20.0)
-    parser.add_argument("--load-timeout", type=float, default=30.0)
+    parser.add_argument("--load-timeout", type=float, default=20.0)
     parser.add_argument("--run-timeout", type=float, default=60.0)
     parser.add_argument("--key-delay-ms", type=int, default=20, help="Delay between injected key events in ms")
     parser.add_argument("--ocr-poll-ms", type=int, default=100, help="OCR polling interval in ms")
     parser.add_argument("--reset-wait-ms", type=int, default=120, help="Wait after hard reset before loading in ms")
-    parser.add_argument("--loader-wait-ms", type=int, default=250, help="Wait after entering +3 Loader before smartload retry in ms")
+    parser.add_argument("--loader-wait-ms", type=int, default=120, help="Wait after entering +3 Loader before smartload retry in ms")
     parser.add_argument("--menu-return-timeout", type=float, default=4.0, help="Timeout waiting for menu after final keypress")
     parser.add_argument(
         "--debug-mode",
@@ -350,9 +413,48 @@ def main() -> int:
         help="Build tester with compile-time debug output enabled or disabled",
     )
     parser.add_argument(
+        "--compact-ui",
+        choices=("on", "off"),
+        default="off",
+        help="Build tester with compact display font (off keeps OCR-safe glyphs)",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Run ZEsarUX without a display window (passes --vo null --ao null)",
+    )
+    parser.add_argument(
+        "--gui-driver",
+        default="cocoa",
+        help="Video output driver for non-headless runs (default: cocoa)",
+    )
+    parser.add_argument(
+        "--gui-zoom",
+        type=int,
+        default=2,
+        help="Window zoom factor for non-headless runs (default: 2)",
+    )
+    parser.add_argument(
+        "--ocr-artifacts-dir",
+        type=Path,
+        default=None,
+        help="Optional directory to write OCR captures and snapshots",
+    )
+    parser.add_argument(
+        "--menu-screenshot",
+        type=Path,
+        default=None,
+        help="Optional BMP/SCR/PBM screenshot path captured when tester menu is visible",
+    )
+    parser.add_argument(
+        "--log-ocr",
+        action="store_true",
+        help="Print key OCR captures to stdout for CI build logs",
+    )
+    parser.add_argument(
+        "--menu-only",
+        action="store_true",
+        help="Load tester and capture menu artifacts only, then exit",
     )
     args = parser.parse_args()
 
@@ -368,7 +470,10 @@ def main() -> int:
         dsk_path = (repo_root / args.dsk).resolve() if not args.dsk.is_absolute() else args.dsk.resolve()
 
     if not args.no_build:
-        build_project(repo_root, args.debug_mode)
+        build_project(repo_root, args.debug_mode, args.compact_ui)
+
+    if args.compact_ui == "on":
+        print("WARNING: --compact-ui on is intended for human display and may reduce OCR reliability", file=sys.stderr)
 
     if not tap_path.exists():
         print(f"ERROR: TAP file not found: {tap_path}", file=sys.stderr)
@@ -386,8 +491,41 @@ def main() -> int:
         print(f"ERROR: port {args.port} already in use. Close existing ZEsarUX or choose --port.", file=sys.stderr)
         return 2
 
-    emulator_speed = max(100, args.emulator_speed)
-    started = start_emulator(args.emulator_binary, args.port, args.machine, emulator_speed, args.headless)
+    if args.headless:
+        emulator_speed = max(100, args.emulator_speed)
+        video_driver = None
+        zoom = None
+    else:
+        # Keep GUI runs readable and stable by default.
+        emulator_speed = 100
+        video_driver = args.gui_driver
+        zoom = max(1, args.gui_zoom)
+
+    artifacts_dir: Path | None = None
+    if args.ocr_artifacts_dir is not None:
+        artifacts_dir = (
+            (repo_root / args.ocr_artifacts_dir).resolve()
+            if not args.ocr_artifacts_dir.is_absolute()
+            else args.ocr_artifacts_dir.resolve()
+        )
+
+    menu_screenshot_path: Path | None = None
+    if args.menu_screenshot is not None:
+        menu_screenshot_path = (
+            (repo_root / args.menu_screenshot).resolve()
+            if not args.menu_screenshot.is_absolute()
+            else args.menu_screenshot.resolve()
+        )
+
+    started = start_emulator(
+        args.emulator_binary,
+        args.port,
+        args.machine,
+        emulator_speed,
+        video_driver,
+        zoom,
+        args.headless,
+    )
     if not wait_for_port(args.host, args.port, args.boot_timeout):
         print("ERROR: timed out waiting for ZEsarUX to start", file=sys.stderr)
         return 2
@@ -403,14 +541,29 @@ def main() -> int:
         if "+3" not in machine:
             raise RuntimeError(f"Emulator not in +3 mode: {machine}")
 
-        load_tap_and_wait_menu(
-            client,
-            tap_path,
-            args.load_timeout,
-            key_delay_ms,
-            loader_wait_s,
-            ocr_poll_s,
-        )
+        try:
+            menu_text = load_tap_and_wait_menu(
+                client,
+                tap_path,
+                args.load_timeout,
+                key_delay_ms,
+                loader_wait_s,
+                ocr_poll_s,
+            )
+        except TimeoutError:
+            if not args.menu_only:
+                raise
+            # In compact-font human mode OCR may fail to match menu markers.
+            menu_text = client.ocr()
+        write_ocr_artifact(artifacts_dir, "menu_loaded.txt", menu_text)
+        log_ocr_block(args.log_ocr, "menu-loaded", menu_text)
+        if menu_screenshot_path is not None:
+            capture_menu_screenshot(client, menu_screenshot_path)
+            print(f"Menu screenshot saved: {menu_screenshot_path}")
+
+        if args.menu_only:
+            print("Menu-only capture complete")
+            return 0
 
         if dsk_path is not None:
             mount_dsk_after_tap_load(
@@ -428,12 +581,14 @@ def main() -> int:
         motor_text = run_single_test_and_return(
             client,
             49,  # '1'
-            ("== MOTOR AND STATUS ==", "PRESS ANY KEY"),
+            ("MOTOR ON", "PRESS ANY KEY"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
             ocr_poll_s,
         )
+        write_ocr_artifact(artifacts_dir, "test_motor_status.txt", motor_text)
+        log_ocr_block(args.log_ocr, "test-motor", motor_text)
         # Confirm motor cycling and drive status register were read.
         assert_ocr_fields(
             clean_response(motor_text),
@@ -443,7 +598,7 @@ def main() -> int:
         run_single_test_and_return(
             client,
             51,  # '3'
-            ("== RECAL + SEEK 2 ==", "X OR BREAK=EXIT"),
+            ("X OR BREAK=EXIT",),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
@@ -462,6 +617,8 @@ def main() -> int:
             exit_key=88,  # 'X'
             allow_unknown_option=True,
         )
+        write_ocr_artifact(artifacts_dir, "test_track_loop.txt", track_text)
+        log_ocr_block(args.log_ocr, "test-track-loop", track_text)
         # Confirm at least one full sector was read with checksum output.
         assert_ocr_fields(
             clean_response(track_text),
@@ -479,6 +636,8 @@ def main() -> int:
             exit_key=88,  # 'X'
             allow_unknown_option=True,
         )
+        write_ocr_artifact(artifacts_dir, "test_rpm.txt", rpm_text)
+        log_ocr_block(args.log_ocr, "test-rpm", rpm_text)
         # Accept a real measurement (VALUE=) or known emulator N/A reasons.
         # Emulators that return the same sector ID on every Read ID command will
         # produce SAME SEC; real hardware with no index signal produces NO REV MARK.
@@ -503,13 +662,21 @@ def main() -> int:
 
         cleaned_results = clean_response(results_text)
         cleaned_menu = clean_response(returned_menu_text)
+        write_ocr_artifact(artifacts_dir, "results_screen.txt", results_text)
+        write_ocr_artifact(artifacts_dir, "returned_menu.txt", returned_menu_text)
+        log_ocr_block(args.log_ocr, "results", results_text)
+        log_ocr_block(args.log_ocr, "returned-menu", returned_menu_text)
+
+        if artifacts_dir is not None:
+            for idx, snap in enumerate(snapshots, start=1):
+                (artifacts_dir / f"snapshot_{idx:02d}.txt").write_text(snap, encoding="utf-8")
         assert_no_unknown_option(cleaned_results, "in run-all output")
         assert_no_unknown_option(cleaned_menu, "after run-all")
 
         summary_lines = [
             line
             for line in cleaned_results.splitlines()
-            if line.startswith(("MOTOR :", "DRIVE :", "RECAL :", "SEEK", "READID:", "TOTAL :"))
+            if line.startswith(("MOTOR", "DRIVE", "RECAL", "SEEK", "READID", "OVERALL ["))
         ]
 
         print("ZEsarUX smoke test passed")

@@ -61,17 +61,33 @@ static void delay_ms(unsigned int ms) {
 #define IOCTL_OTERM_FONT 0x0802
 #endif
 
+#ifndef COMPACT_UI
+#define COMPACT_UI 0
+#endif
+
 /* uPD765A MSR bits */
 #define MSR_RQM 0x80 /* Request for Master */
 #define MSR_DIO 0x40 /* Data direction: 1 = FDC->CPU */
 #define FDC_DRIVE 0 /* internal drive is drive 0 */
 #define FDC_RQM_TIMEOUT 20000U
-#define SEEK_BUSY_WAIT_POLLS 20000U
-#define SEEK_SENSE_RETRIES 12U
-#define SEEK_SENSE_RETRY_DELAY_MS 8U
+#define FDC_CMD_BYTE_GAP_US 16U
+#define SEEK_PREP_DELAY_MS 2U
+#define SEEK_BUSY_TIMEOUT_MS 900U
+#define SEEK_SENSE_RETRIES 48U
+#define SEEK_SENSE_RETRY_DELAY_MS 2U
 #define MOTOR_OFF_SETTLE_MS 35U
 #define READ_LOOP_PAUSE_STEPS 4U
 #define READ_LOOP_PAUSE_MS 6U
+
+/* Approximate sub-millisecond pacing for FDC byte gaps. */
+static void delay_us_approx(unsigned int us) {
+  unsigned int i, j;
+  for (i = 0; i < us; i++) {
+    for (j = 0; j < 4U; j++) {
+      delay_spin_sink++;
+    }
+  }
+}
 #define RPM_LOOP_DELAY_MS 80U
 #define RPM_FAIL_DELAY_MS 80U
 /*
@@ -111,6 +127,125 @@ static unsigned char startup_bank678;
  */
 static unsigned char font_ram[1024];
 
+#if COMPACT_UI
+typedef struct {
+  unsigned char ch;
+  unsigned char rows[7];
+} CompactGlyph;
+
+static void set_compact_glyph(unsigned char ch, const unsigned char rows[7]) {
+  unsigned char *glyph = &font_ram[((unsigned short)ch) * 8U];
+  unsigned char r;
+
+  for (r = 0; r < 7; r++) {
+    glyph[r] = (unsigned char)(rows[r] << 2);
+  }
+  glyph[7] = 0x00;
+}
+
+static void copy_font_glyph(unsigned char dst, unsigned char src) {
+  memcpy(&font_ram[((unsigned short)dst) * 8U],
+         &font_ram[((unsigned short)src) * 8U],
+         8U);
+}
+
+static void apply_compact_font(void) {
+  unsigned char ch;
+  unsigned int i;
+  static const CompactGlyph glyphs[] = {
+      {' ', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+      {'!', {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}},
+      {'"', {0x0A, 0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00}},
+      {'#', {0x0A, 0x1F, 0x0A, 0x0A, 0x1F, 0x0A, 0x00}},
+      {'+', {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00}},
+      {',', {0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08}},
+      {'-', {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}},
+      {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04}},
+      {'/', {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10}},
+      {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
+      {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+      {'2', {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F}},
+      {'3', {0x1F, 0x01, 0x02, 0x06, 0x01, 0x11, 0x0E}},
+      {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}},
+      {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+      {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}},
+      {'7', {0x1F, 0x01, 0x02, 0x02, 0x04, 0x04, 0x04}},
+      {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}},
+      {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
+      {':', {0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00}},
+      {';', {0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x08}},
+      {'=', {0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00}},
+      {'?', {0x0E, 0x11, 0x01, 0x06, 0x04, 0x00, 0x04}},
+      {'[', {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E}},
+      {'\\', {0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01}},
+      {']', {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E}},
+      {'_', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F}},
+      {'|', {0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+      {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+      {'B', {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}},
+      {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+      {'D', {0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C}},
+      {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}},
+      {'F', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}},
+      {'G', {0x0E, 0x11, 0x10, 0x10, 0x13, 0x11, 0x0E}},
+      {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+      {'I', {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+      {'J', {0x1F, 0x01, 0x01, 0x01, 0x01, 0x11, 0x0E}},
+      {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}},
+      {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+      {'M', {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}},
+      {'N', {0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11}},
+      {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+      {'P', {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}},
+      {'Q', {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}},
+      {'R', {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}},
+      {'S', {0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E}},
+      {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+      {'U', {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+      {'V', {0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04}},
+      {'W', {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A}},
+      {'X', {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}},
+      {'Y', {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04}},
+      {'Z', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}},
+  };
+
+  memset(font_ram, 0x00, sizeof(font_ram));
+
+  for (i = 0; i < sizeof(glyphs) / sizeof(glyphs[0]); i++) {
+    set_compact_glyph(glyphs[i].ch, glyphs[i].rows);
+  }
+
+  /* Make undefined printable glyphs readable in compact mode. */
+  for (ch = 32; ch <= 126; ch++) {
+    unsigned char *glyph = &font_ram[((unsigned short)ch) * 8U];
+    if ((glyph[0] | glyph[1] | glyph[2] | glyph[3] |
+         glyph[4] | glyph[5] | glyph[6] | glyph[7]) == 0) {
+      copy_font_glyph(ch, '?');
+    }
+  }
+
+  /* Lowercase maps to uppercase to keep wording readable with a compact set. */
+  for (ch = 'a'; ch <= 'z'; ch++) {
+    copy_font_glyph(ch, (unsigned char)(ch - 'a' + 'A'));
+  }
+}
+#endif
+
+static void init_ui_font(void) {
+  /* Copy ROM font first so paging changes cannot corrupt rendered text. */
+  memcpy(font_ram, (const void *)0x3C00, sizeof(font_ram));
+
+  /*
+   * Optional compact mode replaces glyphs with a custom compact font.
+   * Default build keeps ROM-compatible glyphs for OCR stability.
+   */
+#if COMPACT_UI
+  apply_compact_font();
+#endif
+
+  ioctl(1, IOCTL_OTERM_FONT, font_ram);
+}
+
 /* Test results storage */
 typedef struct {
   unsigned char motor_test_pass;
@@ -133,6 +268,30 @@ static const char* pass_fail(unsigned char ok) {
 
 static const char* yes_no(unsigned char flag) {
   return flag ? "YES" : "NO";
+}
+
+static unsigned char pass_count(void) {
+  return (unsigned char)(results.motor_test_pass + results.sense_drive_pass +
+                         results.recalibrate_pass + results.seek_pass +
+                         results.read_id_pass);
+}
+
+static void ui_clear_screen(void) {
+  /* Form feed clears the text area on Spectrum terminals. */
+  putchar('\f');
+  fflush(stdout);
+}
+
+static void ui_print_bar(const char* label, unsigned char ok) {
+  unsigned char i;
+
+  printf("%-6s ", label);
+  putchar('[');
+  for (i = 0; i < 8; i++) {
+    putchar(ok ? '#' : '.');
+  }
+  putchar(']');
+  printf(" %s\n", pass_fail(ok));
 }
 
 static const char* read_id_failure_reason(unsigned char st1, unsigned char st2) {
@@ -266,12 +425,14 @@ static unsigned char fdc_wait_rqm(unsigned char want_dio,
 static unsigned char fdc_write(unsigned char b) {
   if (!fdc_wait_rqm(0, FDC_RQM_TIMEOUT)) return 0;
   outportb(FDC_DATA_PORT, b);
+  delay_us_approx(FDC_CMD_BYTE_GAP_US);
   return 1;
 }
 
 static unsigned char fdc_read(unsigned char* out) {
   if (!fdc_wait_rqm(1, FDC_RQM_TIMEOUT)) return 0;
   *out = inportb(FDC_DATA_PORT);
+  delay_us_approx(FDC_CMD_BYTE_GAP_US);
   return 1;
 }
 
@@ -323,6 +484,10 @@ static unsigned char cmd_sense_interrupt(unsigned char* st0,
                                          unsigned char* pcn) {
   if (!fdc_write(0x08)) return 0; /* Sense Interrupt Status */
   if (!fdc_read(st0)) return 0;
+  if ((*st0 & 0xC0) == 0x80) {
+    *pcn = 0;
+    return 1;
+  }
   if (!fdc_read(pcn)) return 0;
   return 1;
 }
@@ -339,6 +504,7 @@ static unsigned char cmd_sense_drive_status(unsigned char drive,
 static unsigned char cmd_recalibrate(unsigned char drive) {
   if (!fdc_write(0x07)) return 0; /* Recalibrate */
   if (!fdc_write(drive & 0x03)) return 0;
+  delay_ms(SEEK_PREP_DELAY_MS);
   return 1;
 }
 
@@ -347,6 +513,7 @@ static unsigned char cmd_seek(unsigned char drive, unsigned char head,
   if (!fdc_write(0x0F)) return 0; /* Seek */
   if (!fdc_write((head << 2) | (drive & 0x03))) return 0;
   if (!fdc_write(cyl)) return 0;
+  delay_ms(SEEK_PREP_DELAY_MS);
   return 1;
 }
 
@@ -439,7 +606,7 @@ static unsigned char wait_seek_complete(unsigned char drive,
                                         unsigned char* out_st0,
                                         unsigned char* out_pcn) {
   unsigned char st0, pcn;
-  unsigned int i;
+  unsigned int wait_ms;
   unsigned char tries;
   unsigned char busy_bit = (unsigned char)(1u << (drive & 0x03));
 
@@ -447,10 +614,11 @@ static unsigned char wait_seek_complete(unsigned char drive,
    * Wait for drive-busy bit to clear in MSR.
    * Some emulator runs hold the busy bit longer than expected.
    */
-  for (i = 0; i < SEEK_BUSY_WAIT_POLLS; i++) {
+  for (wait_ms = 0; wait_ms < SEEK_BUSY_TIMEOUT_MS; wait_ms++) {
     if (!(fdc_msr() & busy_bit)) break;
+    delay_ms(1);
   }
-  dbg_seek_wait_loops = i;
+  dbg_seek_wait_loops = wait_ms;
 
   /*
    * Try Sense Interrupt a few times: this works on real hardware and avoids
@@ -964,21 +1132,27 @@ static void test_rpm_checker(void) {
 
 static void print_results(void) {
   unsigned char total;
+  unsigned char i;
 
-  printf("\n== RESULTS ==\n");
-  printf("MOTOR : %s\n", pass_fail(results.motor_test_pass));
-  printf("DRIVE : %s\n", pass_fail(results.sense_drive_pass));
-  printf("RECAL : %s\n", pass_fail(results.recalibrate_pass));
-  printf("SEEK  : %s\n", pass_fail(results.seek_pass));
-  printf("READID: %s\n", pass_fail(results.read_id_pass));
+  ui_clear_screen();
+  total = pass_count();
 
-  total = results.motor_test_pass + results.sense_drive_pass +
-          results.recalibrate_pass + results.seek_pass + results.read_id_pass;
-
-  printf("TOTAL : %u/5 PASS\n", total);
+  printf("+------------------------------+\n");
+  printf("|       TEST REPORT CARD       |\n");
+  printf("+------------------------------+\n");
+  ui_print_bar("MOTOR", results.motor_test_pass);
+  ui_print_bar("DRIVE", results.sense_drive_pass);
+  ui_print_bar("RECAL", results.recalibrate_pass);
+  ui_print_bar("SEEK", results.seek_pass);
+  ui_print_bar("READID", results.read_id_pass);
+  printf("\nOVERALL [");
+  for (i = 0; i < total; i++) putchar('#');
+  for (; i < 5; i++) putchar('.');
+  printf("] %u/5 PASS\n", total);
 }
 
 static void run_all_tests(void) {
+  ui_clear_screen();
   memset(&results, 0, sizeof(results));
   test_motor_and_drive_status(0);
   test_recal_seek_track2(0);
@@ -988,29 +1162,41 @@ static void run_all_tests(void) {
 }
 
 static void menu_print(void) {
+  unsigned char total = pass_count();
+  char status_line[29];
+
   printf("\n");
-  printf("== ZX +3 DISK TEST ==\n");
-  printf("1 MOTOR+STATUS\n");
-  printf("2 DRIVE PROBE\n");
-  printf("3 RECAL+SEEK 2\n");
-  printf("4 STEP SEEK\n");
-  printf("5 READ ID\n");
-  printf("6 READ TRACK LOOP\n");
-  printf("7 RPM CHECK LOOP\n");
-  printf("A RUN ALL\n");
-  printf("R RESULTS\n");
-  printf("C CLEAR\n");
-  printf("Q QUIT\n");
-  printf("KEY: ");
+  printf("+------------------------------+\n");
+  printf("|      ZX +3 DISK TESTER      |\n");
+  printf("+------------------------------+\n");
+  if (total == 0) {
+    strcpy(status_line, "STATUS: NO TESTS RUN");
+  } else {
+    sprintf(status_line, "STATUS: %u/5 PASS", total);
+  }
+  printf("| %-28s |\n", status_line);
+  printf("+------------------------------+\n");
+  printf("| 1 MOTOR AND DRIVE STATUS    |\n");
+  printf("| 2 DRIVE READ ID PROBE       |\n");
+  printf("| 3 RECALIBRATE AND SEEK      |\n");
+  printf("|   TRACK 2                   |\n");
+  printf("| 4 INTERACTIVE STEP SEEK     |\n");
+  printf("| 5 READ ID ON TRACK 0        |\n");
+  printf("| 6 READ TRACK DATA LOOP      |\n");
+  printf("| 7 DISK RPM CHECK LOOP       |\n");
+  printf("| A RUN ALL CORE TESTS        |\n");
+  printf("| R SHOW REPORT CARD          |\n");
+  printf("| C CLEAR STORED RESULTS      |\n");
+  printf("| Q QUIT                      |\n");
+  printf("+------------------------------+\n");
+  printf("SELECT KEY: ");
 }
 
 int main(void) {
   int ch;
 
-  /* Fix DivMMC font corruption: copy ROM font to RAM before ROM paging changes.
-     See font_ram comment for details. Must run BEFORE set_motor_off(). */
-  memcpy(font_ram, (const void *)0x3C00, sizeof(font_ram));
-  ioctl(1, IOCTL_OTERM_FONT, font_ram);
+    /* Fix DivMMC font corruption and apply readable UI font. */
+    init_ui_font();
 
   /* Capture paging state at startup for debug output. */
   startup_bank678 = *(volatile unsigned char *)0x5B67;
@@ -1026,6 +1212,7 @@ int main(void) {
   }
 
   for (;;) {
+    ui_clear_screen();
     menu_print();
     ch = read_key_blocking();
     printf("\n");
@@ -1033,36 +1220,48 @@ int main(void) {
 
     switch (ch) {
       case '1':
+        ui_clear_screen();
         test_motor_and_drive_status(1);
         break;
       case '2':
+        ui_clear_screen();
         test_read_id_probe();
         press_any_key(1);
         break;
       case '3':
+        ui_clear_screen();
         test_recal_seek_track2(1);
         break;
       case '4':
+        ui_clear_screen();
         test_seek_interactive();
         break;
       case '5':
+        ui_clear_screen();
         test_read_id(1);
         break;
       case '6':
+        ui_clear_screen();
         test_read_track_data_loop();
         break;
       case '7':
+        ui_clear_screen();
         test_rpm_checker();
         break;
       case 'A':
+        ui_clear_screen();
         run_all_tests();
         break;
       case 'R':
+        ui_clear_screen();
         print_results();
+        press_any_key(1);
         break;
       case 'C':
+        ui_clear_screen();
         memset(&results, 0, sizeof(results));
         printf("RESULTS CLEARED\n");
+        press_any_key(1);
         break;
       case 'Q':
         plus3_motor_off();
