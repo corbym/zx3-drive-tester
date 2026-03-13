@@ -39,6 +39,7 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "gh": true
+        "gh": true,
+        "podman": true
     }
 }
