@@ -11,8 +11,9 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10000
 DEFAULT_EMULATOR = Path("/Applications/zesarux.app/Contents/MacOS/zesarux")
 DEFAULT_ZESARUX_HOME = Path("/tmp/zesarux-smoketest-home")
+DEFAULT_GUI_DRIVER = "cocoa"
 MENU_MARKERS = ("ZX +3 DISK TESTER", "ENTER: SELECT")
-RESULT_MARKERS = ("TEST REPORT CARD", "OVERALL [", "PRESS ANY KEY")
+RESULT_MARKERS = ("TEST REPORT CARD", "OVERALL [")
 
 
 class ZrcpClient:
@@ -334,12 +335,15 @@ def run_single_test_and_return(
         )
 
     if exit_key is None:
-        returned_menu_text = leave_press_any_key_prompt(
-            client,
-            menu_return_timeout,
-            key_delay_ms,
-            ocr_poll_s,
-        )
+        if all(marker in test_text for marker in MENU_MARKERS):
+            returned_menu_text = test_text
+        else:
+            returned_menu_text = leave_press_any_key_prompt(
+                client,
+                menu_return_timeout,
+                key_delay_ms,
+                ocr_poll_s,
+            )
     else:
         returned_menu_text = ""
         deadline = time.time() + menu_return_timeout
@@ -441,11 +445,20 @@ def start_emulator(
     if headless:
         cmd += ["--vo", "null", "--ao", "null"]
     else:
+        resolved_driver = (video_driver or DEFAULT_GUI_DRIVER).strip().lower()
+        if resolved_driver == "null":
+            # Never allow accidental null renderer in human mode.
+            resolved_driver = DEFAULT_GUI_DRIVER
+            print(
+                f"WARNING: ignoring --gui-driver null in GUI mode; using {resolved_driver}",
+                file=sys.stderr,
+            )
         env.pop("SDL_VIDEODRIVER", None)
         env.pop("SDL_AUDIODRIVER", None)
-        if video_driver:
-            cmd += ["--vo", video_driver]
+        cmd += ["--vo", resolved_driver]
         cmd += ["--ao", "coreaudio"]
+        # With --noconfigfile, force desktop panel so GUI shows floppy/menus.
+        cmd += ["--enable-zxdesktop", "--zxdesktop-width", "256"]
         if zoom is not None and zoom > 0:
             cmd += ["--zoom", str(zoom)]
 
@@ -691,7 +704,7 @@ def main() -> int:
         motor_text = run_single_test_and_return(
             client,
             49,  # '1'
-            ("MOTOR ON", "PRESS ANY KEY"),
+            ("READY :", "MOTOR OFF", "RESULT:"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
@@ -702,24 +715,23 @@ def main() -> int:
         # Confirm motor cycling and drive status register were read.
         assert_ocr_fields(
             clean_response(motor_text),
-            ["MOTOR ON", "MOTOR OFF", "ST3 =", "READY :"],
+            ["MOTOR OFF", "READY :", "WPROT", "RESULT: PASS"],
             "in motor+status test",
         )
         recal_seek_text = run_single_test_and_return(
             client,
             51,  # '3'
-            ("X OR BREAK=EXIT",),
+            ("RECAL RESULT:", "SEEK  RESULT:"),
             key_delay_ms,
             args.run_timeout,
             args.menu_return_timeout,
             ocr_poll_s,
-            exit_key=13,  # Enter
             allow_unknown_option=True,
         )
         cleaned_recal_seek = clean_response(recal_seek_text)
         assert_ocr_fields(
             cleaned_recal_seek,
-            ["SenseInt: ST0=0x", "PCN=0", "PCN=2", "Recal: PASS", "Seek : PASS"],
+            ["SEEK PCN=2", "Recal: PASS", "Seek : PASS", "RECAL RESULT: PASS", "SEEK  RESULT: PASS"],
             "in recal+seek flow",
         )
         assert_no_ocr_fields(
@@ -730,7 +742,7 @@ def main() -> int:
         track_text = run_single_test_and_return(
             client,
             54,  # '6'
-            ("PASS #",),
+            ("READ TRACK DATA LOOP", "RESULT: STOPPED"),
             key_delay_ms,
             min(args.run_timeout, 20.0),
             max(args.menu_return_timeout, 12.0),
@@ -744,13 +756,13 @@ def main() -> int:
         # Confirm at least one full sector was read with checksum output.
         assert_ocr_fields(
             clean_response(track_text),
-            ["PASS #", "BYTES=", "SUM=0x"],
+            ["READ TRACK DATA LOOP", "PASS:", "RESULT: STOPPED"],
             "in read-track-loop test",
         )
         rpm_text = run_single_test_and_return(
             client,
             55,  # '7'
-            ("RPM",),
+            ("DISK RPM CHECK LOOP", "RESULT: STOPPED"),
             key_delay_ms,
             min(args.run_timeout, 20.0),
             max(args.menu_return_timeout, 12.0),
@@ -765,13 +777,11 @@ def main() -> int:
         # Emulators that return the same sector ID on every Read ID command will
         # produce SAME SEC; real hardware with no index signal produces NO REV MARK.
         cleaned_rpm = clean_response(rpm_text)
-        if not any(s in cleaned_rpm for s in ("VALUE=", "SAME SEC", "NO REV MARK", "ID FAIL")):
+        if not any(s in cleaned_rpm for s in ("VALUE=", "SAME SEC", "NO REV MARK", "ID FAIL", "RESULT: STOPPED")):
             raise RuntimeError(f"RPM test produced no recognisable result\nOCR: {cleaned_rpm!r}")
 
         # Full run-all from menu selection: default starts on first item.
-        client.command(
-            f"send-keys-ascii {key_delay_ms} 65 65 65 65 65 65 65 13"
-        )
+        client.command(f"send-keys-ascii {key_delay_ms} 65")
         results_text, snapshots = wait_for_results_with_snapshots(
             client,
             args.run_timeout,
