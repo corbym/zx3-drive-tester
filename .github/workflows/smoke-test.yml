@@ -91,7 +91,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             zx3-disk-test:ci \
-            bash -c "cd /workspace && ./tools/_screen_check.py --headless --emulator-binary /usr/local/bin/zesarux"
+            bash -c "cd /workspace && python3 ./tools/_screen_check.py --headless --emulator-binary /usr/local/bin/zesarux"
 
       - name: Create and push semver tag
         id: tag_semver
