@@ -92,14 +92,19 @@ static unsigned char menu_down_pressed(void) {
                          s_pressed() || v_pressed());
 }
 
-static unsigned char any_menu_key_down(void) {
-  unsigned int i;
-  for (i = 0; i < sizeof(menu_keymap) / sizeof(menu_keymap[0]); i++) {
-    if ((inportb(menu_keymap[i].row_port) & menu_keymap[i].bit_mask) == 0) {
-      return 1;
-    }
+static void wait_for_key_release(unsigned short row_port, unsigned char bit_mask) {
+  while ((inportb(row_port) & bit_mask) == 0) {
   }
-  return 0;
+}
+
+static void wait_for_menu_up_release(void) {
+  while (menu_up_pressed()) {
+  }
+}
+
+static void wait_for_menu_down_release(void) {
+  while (menu_down_pressed()) {
+  }
 }
 
 const MenuItem *menu_items(void) { return MENU_ITEMS; }
@@ -139,22 +144,19 @@ int read_menu_key_blocking(void) {
     }
 
     if (menu_up_pressed()) {
-      while (menu_up_pressed() || any_menu_key_down()) {
-      }
+      wait_for_menu_up_release();
       return MENU_KEY_UP;
     }
 
     if (menu_down_pressed()) {
-      while (menu_down_pressed() || any_menu_key_down()) {
-      }
+      wait_for_menu_down_release();
       return MENU_KEY_DOWN;
     }
 
     for (i = 0; i < sizeof(menu_keymap) / sizeof(menu_keymap[0]); i++) {
       if ((inportb(menu_keymap[i].row_port) & menu_keymap[i].bit_mask) == 0) {
         char key = menu_keymap[i].key;
-        while (any_menu_key_down()) {
-        }
+        wait_for_key_release(menu_keymap[i].row_port, menu_keymap[i].bit_mask);
         if (key == 'F' || key == 'W') return MENU_KEY_UP;
         if (key == 'V' || key == 'S') return MENU_KEY_DOWN;
         return key;

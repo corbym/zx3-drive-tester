@@ -18,8 +18,9 @@ The program exposes a menu of low-level checks and tests:
 - **Disk RPM checker** – Continuous rotational-speed estimate from repeated ID reads; requires readable sector IDs
 - **Run all** – Execute all tests in sequence and summarize results
 - **Debug build** – Optional compile-time verbose telemetry for harness/debug sessions
-- **Single-key UI** – Menu and prompts use direct keypresses (no Enter required)
+- **Direct-key menu UI** – Menu navigation and hotkeys respond directly; confirmation prompts use `ENTER`
 - **Retry loops** – Interactive seek, Read ID, track-data loop, and RPM checker repeat until `X` (or BREAK) is pressed
+- **Low-memory default renderer** – The default build avoids the full-screen backbuffer path to preserve startup headroom on +3 memory limits
 
 ## Hardware & I/O Ports
 
@@ -64,7 +65,7 @@ This produces:
 
 ```sh
 mkdir -p out
-zcc +zx -vn -clib=new -create-app disk_tester.c intstate.asm -o ./out/disk_tester
+zcc +zx -vn -clib=new -create-app disk_tester.c menu_system.c intstate.asm -o ./out/disk_tester
 ```
 
 ## Running
@@ -97,6 +98,9 @@ The harness loads the tester program from the TAP file and mounts a DSK image fo
 - `--dsk out/disk_tester_plus3.dsk` – DSK image mounted in drive A
 - `--no-dsk` – Disable DSK mounting
 - `--menu-only` – Load to menu, capture artifacts, and exit (for human screenshot review)
+- `--max-bss-uninitialized-tail 0xFEFF` – Fail fast if the map file shows a BSS regression past the configured address
+- `--allow-screen-backbuffers` – Override the default smoke guard that fails if `_ui_back_pixels` or `_ui_back_attrs` reappear
+- `--check-track-loop-status` – Run an extra regression check that opens the track-loop test, verifies the initial status page appears, then verifies a populated status page appears
 
 **Example:**
 ```sh
@@ -105,18 +109,19 @@ The harness loads the tester program from the TAP file and mounts a DSK image fo
 
 The harness will:
 1. Build the project
-2. Start ZEsarUX in +3 mode
-3. Load the TAP file
-4. Load the DSK test image for drive tests
-5. Validate single-key menu interactions on individual tests (including loop/exit paths)
-6. Check for menu-return regressions (including stray bad-key output)
-7. Run all tests (`A` key)
-8. Capture and display results via OCR
-9. Clean up and exit
+2. Fail fast if the generated map file shows a known memory-pressure regression
+3. Start ZEsarUX in +3 mode
+4. Load the TAP file
+5. Load the DSK test image for drive tests
+6. Optionally verify that a selected loop test shows its status page before and after live data appears
+7. Validate menu interactions and menu-return regressions (including stray bad-key output)
+8. Run all tests (`A` key)
+9. Capture and display results via OCR
+10. Clean up and exit
 
 Notes:
 - `save-screen` via ZRCP supports `bmp`, `scr`, and `pbm` output formats.
-- Default loader wait was reduced to make startup faster while keeping fallback logic.
+- Smoke runs now fail before emulator startup if the built map file shows the old memory-pressure signature.
 - CI captures OCR artifacts from a full smoke run plus a compact menu-only capture for human review.
 
 ## Read ID Result Notes
@@ -138,6 +143,11 @@ For a denser human-facing font while keeping menu wording unchanged, build with
 
 For CI and OCR-driven smoke tests, keep `COMPACT_UI=0` (default) to preserve
 stable character recognition.
+
+The default non-compact build now also keeps the low-memory text/attribute
+renderer enabled rather than the old full-screen backbuffer path. This trades
+some cosmetic redraw smoothness for a large reduction in BSS usage and avoids
+reintroducing the startup-memory regression.
 
 ## Docker Build & CI
 

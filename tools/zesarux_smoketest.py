@@ -14,6 +14,7 @@ DEFAULT_ZESARUX_HOME = Path("/tmp/zesarux-smoketest-home")
 DEFAULT_GUI_DRIVER = "cocoa"
 MENU_MARKERS = ("ZX +3 DISK TESTER", "ENTER: SELECT")
 RESULT_MARKERS = ("TEST REPORT CARD", "OVERALL [")
+DEFAULT_MAX_BSS_UNINITIALIZED_TAIL = 0xFEFF
 
 
 class ZrcpClient:
@@ -84,6 +85,53 @@ def clean_response(text: str) -> str:
                 continue
         lines.append(line.rstrip())
     return "\n".join(lines).strip()
+
+
+def parse_map_symbols(map_path: Path) -> dict[str, int]:
+    symbols: dict[str, int] = {}
+    for raw_line in map_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if "=" not in line:
+            continue
+        left, right = line.split("=", 1)
+        symbol = left.strip()
+        value_text = right.strip().split()[0]
+        if not value_text.startswith("$"):
+            continue
+        try:
+            symbols[symbol] = int(value_text[1:], 16)
+        except ValueError:
+            continue
+    return symbols
+
+
+def fail_fast_memory_regression(
+    repo_root: Path,
+    max_bss_uninitialized_tail: int,
+    fail_on_backbuffer_symbols: bool,
+) -> None:
+    map_path = repo_root / "out" / "disk_tester.map"
+    if not map_path.exists():
+        raise RuntimeError(f"Missing map file for memory check: {map_path}")
+
+    map_text = map_path.read_text(encoding="utf-8", errors="replace")
+    symbols = parse_map_symbols(map_path)
+
+    if fail_on_backbuffer_symbols:
+        if "_ui_back_pixels" in map_text or "_ui_back_attrs" in map_text:
+            raise RuntimeError(
+                "Memory regression: full-screen backbuffer symbols found "
+                "(_ui_back_pixels/_ui_back_attrs)"
+            )
+
+    tail = symbols.get("__BSS_UNINITIALIZED_tail")
+    if tail is None:
+        raise RuntimeError("Memory regression check failed: __BSS_UNINITIALIZED_tail not found")
+    if tail > max_bss_uninitialized_tail:
+        raise RuntimeError(
+            "Memory regression: __BSS_UNINITIALIZED_tail too high "
+            f"(${tail:04X} > ${max_bss_uninitialized_tail:04X})"
+        )
 
 
 def snapshot_state(client: ZrcpClient, label: str) -> str:
@@ -323,6 +371,85 @@ def run_single_test_and_return(
     return test_text
 
 
+def run_track_loop_status_regression_check(
+    client: ZrcpClient,
+    tap_path: Path,
+    key_delay_ms: int,
+    open_timeout: float,
+    stop_timeout: float,
+    load_timeout: float,
+    loader_wait_s: float,
+    reset_wait_s: float,
+    ocr_poll_s: float,
+) -> tuple[str, str]:
+    # Select one test (track loop via hotkey 'D') and verify:
+    # 1) initial status page appears,
+    # 2) populated status page appears afterwards.
+    # Afterwards, hard-reset and reload the TAP so the main smoke run continues
+    # from a deterministic menu state.
+    open_deadline = time.time() + open_timeout
+    initial_text = ""
+    while time.time() < open_deadline:
+        client.command(f"send-keys-ascii {key_delay_ms} 68")  # 'D'
+        initial_text = client.ocr()
+        clean_initial = clean_response(initial_text)
+        if "READ TRACK DATA LOOP" in clean_initial:
+            # Accept template or first populated frame.
+            if (
+                "TRACK :" not in clean_initial
+                and "PASS  :" not in clean_initial
+                and "FAIL  :" not in clean_initial
+            ) or (
+                "KEYS  : J/K TRACK  ENTER/X EXIT" in clean_initial
+                and "TRACK :" in clean_initial
+                and "PASS  :" in clean_initial
+                and "FAIL  :" in clean_initial
+            ):
+                break
+        time.sleep(ocr_poll_s)
+    else:
+        raise TimeoutError(
+            "Timed out waiting for initial track-loop status screen\n"
+            f"Last OCR:\n{initial_text}"
+        )
+
+    data_deadline = time.time() + stop_timeout
+    populated_text = ""
+    while time.time() < data_deadline:
+        populated_text = client.ocr()
+        clean_data = clean_response(populated_text)
+        if (
+            "READ TRACK DATA LOOP" in clean_data
+            and "TRACK :" in clean_data
+            and "PASS  :" in clean_data
+            and "FAIL  :" in clean_data
+            and "LAST  :" in clean_data
+            and "INFO  :" in clean_data
+            and "RESULT:" in clean_data
+        ):
+            break
+        time.sleep(ocr_poll_s)
+    else:
+        raise TimeoutError(
+            "Timed out waiting for populated track-loop status screen\n"
+            f"Last OCR:\n{populated_text}"
+        )
+
+    # Return to a deterministic menu state for the remainder of the smoke run.
+    client.command("hard-reset-cpu")
+    time.sleep(reset_wait_s)
+    load_tap_and_wait_menu(
+        client,
+        tap_path,
+        load_timeout,
+        key_delay_ms,
+        loader_wait_s,
+        ocr_poll_s,
+    )
+
+    return initial_text, populated_text
+
+
 def mount_dsk_after_tap_load(
     client: ZrcpClient,
     dsk_path: Path,
@@ -519,6 +646,37 @@ def main() -> int:
         action="store_true",
         help="Load tester and capture menu artifacts only, then exit",
     )
+    parser.add_argument(
+        "--max-bss-uninitialized-tail",
+        type=lambda s: int(s, 0),
+        default=DEFAULT_MAX_BSS_UNINITIALIZED_TAIL,
+        help=(
+            "Fail fast if __BSS_UNINITIALIZED_tail in out/disk_tester.map exceeds this value "
+            "(accepts decimal or hex, e.g. 0xFEFF)"
+        ),
+    )
+    parser.add_argument(
+        "--allow-screen-backbuffers",
+        action="store_true",
+        help="Allow _ui_back_pixels/_ui_back_attrs in map file (default: fail if present)",
+    )
+    parser.add_argument(
+        "--check-track-loop-status",
+        action="store_true",
+        help="Run a regression check that verifies the selected track-loop test shows an initial status page and then a populated status page",
+    )
+    parser.add_argument(
+        "--track-loop-open-timeout",
+        type=float,
+        default=12.0,
+        help="Timeout waiting for initial track loop status page",
+    )
+    parser.add_argument(
+        "--track-loop-stop-timeout",
+        type=float,
+        default=12.0,
+        help="Timeout waiting for stopped track loop status page",
+    )
     args = parser.parse_args()
 
     ocr_poll_s = max(0.05, args.ocr_poll_ms / 1000.0)
@@ -534,6 +692,12 @@ def main() -> int:
 
     if not args.no_build:
         build_project(repo_root, args.debug_mode, args.compact_ui, args.headless)
+
+    fail_fast_memory_regression(
+        repo_root,
+        args.max_bss_uninitialized_tail,
+        fail_on_backbuffer_symbols=not args.allow_screen_backbuffers,
+    )
 
     if args.compact_ui == "on":
         print("WARNING: --compact-ui on is intended for human display and may reduce OCR reliability", file=sys.stderr)
@@ -636,6 +800,23 @@ def main() -> int:
             print("Menu-only capture complete")
             return 0
 
+        if args.check_track_loop_status:
+            status_before_text, status_after_text = run_track_loop_status_regression_check(
+                client,
+                tap_path,
+                key_delay_ms,
+                args.track_loop_open_timeout,
+                args.track_loop_stop_timeout,
+                args.load_timeout,
+                loader_wait_s,
+                reset_wait_s,
+                ocr_poll_s,
+            )
+            write_ocr_artifact(artifacts_dir, "selected_test_initial_status.txt", status_before_text)
+            write_ocr_artifact(artifacts_dir, "selected_test_populated_status.txt", status_after_text)
+            log_ocr_block(args.log_ocr, "selected-test-initial", status_before_text)
+            log_ocr_block(args.log_ocr, "selected-test-populated", status_after_text)
+
         if dsk_path is not None:
             mount_dsk_after_tap_load(
                 client,
@@ -711,6 +892,7 @@ def main() -> int:
         print(f"Machine: {args.machine}")
         print(f"TAP: {tap_path}")
         print(f"DSK: {dsk_path if dsk_path is not None else 'not mounted'}")
+        print(f"Memory guard: __BSS_UNINITIALIZED_tail <= ${args.max_bss_uninitialized_tail:04X}")
         print("Summary:")
         for line in summary_lines:
             print(line)

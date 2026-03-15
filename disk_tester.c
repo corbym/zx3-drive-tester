@@ -319,6 +319,13 @@ typedef struct {
 static TestResults results;
 static unsigned char last_test_failed;
 
+#define REPORT_STATUS_NONE     0U
+#define REPORT_STATUS_READY    1U
+#define REPORT_STATUS_RUNNING  2U
+#define REPORT_STATUS_COMPLETE 3U
+
+static unsigned char report_status_code;
+
 static void disable_terminal_auto_pause(void) {
   /* Avoid hidden key waits when output scrolls beyond one screen. */
   ioctl(1, IOCTL_OTERM_PAUSE, 0);
@@ -338,6 +345,27 @@ static unsigned char pass_count(void) {
                          results.read_id_pass);
 }
 
+static void reset_report_progress(void) {
+  report_status_code = REPORT_STATUS_NONE;
+}
+
+static const char* report_status_text(void) {
+  switch (report_status_code) {
+    case REPORT_STATUS_READY:
+      return "STATUS: READY";
+    case REPORT_STATUS_RUNNING:
+      return "STATUS: RUNNING";
+    case REPORT_STATUS_COMPLETE:
+      return "STATUS: COMPLETE";
+    default:
+      return "STATUS: NO TESTS RUN";
+  }
+}
+
+static void set_report_status(unsigned char status_code) {
+  report_status_code = status_code;
+}
+
 static void ui_term_clear(void) {
   ioctl(1, IOCTL_OTERM_CLS, 0);
   ioctl(1, IOCTL_OTERM_RESET_SCROLL, 0);
@@ -355,6 +383,35 @@ static void ui_term_clear(void) {
 #define ZX_PIXELS_BASE 0x4000
 #define ZX_PIXELS_SIZE 0x1800U
 #define ZX_ATTR_SIZE 0x300U
+
+static const unsigned char* ui_active_font_ptr(void) {
+#if COMPACT_UI && !HEADLESS_ROM_FONT
+  return compact_font_active ? font_ram : font_rom;
+#else
+  return font_ram;
+#endif
+}
+
+static unsigned short zx_pixel_offset(unsigned char y, unsigned char xbyte) {
+  return (unsigned short)((((unsigned short)(y & 0xC0U)) << 5) |
+                          (((unsigned short)(y & 0x07U)) << 8) |
+                          (((unsigned short)(y & 0x38U)) << 2) |
+                          xbyte);
+}
+
+static void ui_screen_put_char(unsigned char row, unsigned char col, char ch) {
+  const unsigned char* font = ui_active_font_ptr();
+  const unsigned char* glyph;
+  unsigned char gy;
+  unsigned char* pixels = (unsigned char*)ZX_PIXELS_BASE;
+
+  if (row >= 24 || col >= 32) return;
+  glyph = &font[((unsigned short)(unsigned char)ch) * 8U];
+  for (gy = 0; gy < 8; gy++) {
+    unsigned char y = (unsigned char)(row * 8U + gy);
+    pixels[zx_pixel_offset(y, col)] = glyph[gy];
+  }
+}
 
 static void ui_attr_set_cell(unsigned char row,
                              unsigned char col,
@@ -381,24 +438,9 @@ static void ui_attr_fill(unsigned char ink,
   }
 }
 
-#if !COMPACT_UI
+#if 0
 static unsigned char ui_back_pixels[ZX_PIXELS_SIZE];
 static unsigned char ui_back_attrs[ZX_ATTR_SIZE];
-
-static const unsigned char* ui_active_font_ptr(void) {
-#if COMPACT_UI && !HEADLESS_ROM_FONT
-  return compact_font_active ? font_ram : font_rom;
-#else
-  return font_ram;
-#endif
-}
-
-static unsigned short zx_pixel_offset(unsigned char y, unsigned char xbyte) {
-  return (unsigned short)((((unsigned short)(y & 0xC0U)) << 5) |
-                          (((unsigned short)(y & 0x07U)) << 8) |
-                          (((unsigned short)(y & 0x38U)) << 2) |
-                          xbyte);
-}
 
 static void ui_back_attr_set_cell(unsigned char row,
                                   unsigned char col,
@@ -467,7 +509,7 @@ static void ui_back_header_bar(const char* title) {
   }
 }
 
-#if !COMPACT_UI
+#if 0
 static void ui_back_highlight_kv_value(unsigned char row,
                                        unsigned char start_col,
                                        unsigned char ink,
@@ -571,7 +613,34 @@ static void ui_render_text_screen(const char* title,
 
 #endif
 
-#if COMPACT_UI
+#if 1
+static void ui_apply_menu_row_visual(unsigned char index, unsigned char selected) {
+  const MenuItem *items = menu_items();
+  unsigned char count = menu_item_count();
+  unsigned char row;
+  unsigned char col;
+  unsigned char paper;
+
+  if (index >= count) return;
+
+  row = (unsigned char)(3U + index);
+  paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
+  for (col = 0; col < 32U; col++) {
+    ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, paper, 1);
+  }
+  if (items[index].hot_col < 31U) {
+    ui_attr_set_cell(row, (unsigned char)(items[index].hot_col + 1U), ZX_COLOUR_BLUE, paper, 1);
+  }
+  ui_screen_put_char(row, 31, selected ? '~' : ' ');
+}
+
+static void ui_update_main_menu_selection(unsigned char old_index,
+                                          unsigned char new_index) {
+  if (old_index == new_index) return;
+  ui_apply_menu_row_visual(old_index, 0);
+  ui_apply_menu_row_visual(new_index, 1);
+}
+
 static void ui_render_main_menu(unsigned char selected_index, unsigned char total) {
   const MenuItem *items = menu_items();
   unsigned char count = menu_item_count();
@@ -591,11 +660,7 @@ static void ui_render_main_menu(unsigned char selected_index, unsigned char tota
   printf("%s\n\n", status_line);
 
   for (i = 0; i < count; i++) {
-    if (i == selected_index) {
-      printf(" %s ~\n", items[i].label);
-    } else {
-      printf(" %s\n", items[i].label);
-    }
+    printf(" %s\n", items[i].label);
   }
 
   printf("\n^: UP  v: DOWN\n");
@@ -611,18 +676,8 @@ static void ui_render_main_menu(unsigned char selected_index, unsigned char tota
   for (col = 0; col < 8; col++) {
     ui_attr_set_cell(0, (unsigned char)(24 + col), STRIPE_INK[col], STRIPE_PAPER[col], 1);
   }
-  if (selected_index < count) {
-    unsigned char row = (unsigned char)(3 + selected_index);
-    for (col = 0; col < 32; col++) {
-      ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, ZX_COLOUR_CYAN, 1);
-    }
-  }
   for (i = 0; i < count; i++) {
-    unsigned char row = (unsigned char)(3 + i);
-    unsigned char paper = (i == selected_index) ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
-    if (items[i].hot_col < 31U) {
-      ui_attr_set_cell(row, (unsigned char)(items[i].hot_col + 1U), ZX_COLOUR_BLUE, paper, 1);
-    }
+    ui_apply_menu_row_visual(i, (unsigned char)(i == selected_index));
   }
 }
 
@@ -634,57 +689,58 @@ static void ui_render_report_card(void) {
 
   ui_term_clear();
   printf(" TEST REPORT CARD\n");
-  printf("------------------------------\n\n");
+  printf("------------------------------\n");
+    printf("%s\n\n", report_status_text());
   printf("MOTOR  [%c%c%c%c%c%c%c%c] %s\n",
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         results.motor_test_pass ? '#' : '.',
-         pass_fail(results.motor_test_pass));
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       results.motor_test_pass ? '#' : '.',
+       pass_fail(results.motor_test_pass));
   printf("DRIVE  [%c%c%c%c%c%c%c%c] %s\n",
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         results.sense_drive_pass ? '#' : '.',
-         pass_fail(results.sense_drive_pass));
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       results.sense_drive_pass ? '#' : '.',
+       pass_fail(results.sense_drive_pass));
   printf("RECAL  [%c%c%c%c%c%c%c%c] %s\n",
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         results.recalibrate_pass ? '#' : '.',
-         pass_fail(results.recalibrate_pass));
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       results.recalibrate_pass ? '#' : '.',
+       pass_fail(results.recalibrate_pass));
   printf("SEEK   [%c%c%c%c%c%c%c%c] %s\n",
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         results.seek_pass ? '#' : '.',
-         pass_fail(results.seek_pass));
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       results.seek_pass ? '#' : '.',
+       pass_fail(results.seek_pass));
   printf("READID [%c%c%c%c%c%c%c%c] %s\n",
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         results.read_id_pass ? '#' : '.',
-         pass_fail(results.read_id_pass));
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       results.read_id_pass ? '#' : '.',
+       pass_fail(results.read_id_pass));
   printf("\nOVERALL [%c%c%c%c%c] %u/5 PASS\n",
          total > 0 ? '#' : '.',
          total > 1 ? '#' : '.',
@@ -759,67 +815,68 @@ static void ui_render_report_card(void) {
 
   ui_back_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
   ui_back_header_bar("TEST REPORT CARD");
-  ui_back_put_text(2, 0, "+------------------------------+");
+  ui_back_put_text(1, 0, report_status_text());
+  ui_back_put_text(3, 0, "+------------------------------+");
 
   sprintf(line, "MOTOR  [%c%c%c%c%c%c%c%c] %s",
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          results.motor_test_pass ? '#' : '.',
-          pass_fail(results.motor_test_pass));
-  ui_back_put_text(4, 0, line);
-
-  sprintf(line, "DRIVE  [%c%c%c%c%c%c%c%c] %s",
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          results.sense_drive_pass ? '#' : '.',
-          pass_fail(results.sense_drive_pass));
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        results.motor_test_pass ? '#' : '.',
+        pass_fail(results.motor_test_pass));
   ui_back_put_text(5, 0, line);
 
-  sprintf(line, "RECAL  [%c%c%c%c%c%c%c%c] %s",
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          results.recalibrate_pass ? '#' : '.',
-          pass_fail(results.recalibrate_pass));
+  sprintf(line, "DRIVE  [%c%c%c%c%c%c%c%c] %s",
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        results.sense_drive_pass ? '#' : '.',
+        pass_fail(results.sense_drive_pass));
   ui_back_put_text(6, 0, line);
 
-  sprintf(line, "SEEK   [%c%c%c%c%c%c%c%c] %s",
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          results.seek_pass ? '#' : '.',
-          pass_fail(results.seek_pass));
+  sprintf(line, "RECAL  [%c%c%c%c%c%c%c%c] %s",
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        results.recalibrate_pass ? '#' : '.',
+        pass_fail(results.recalibrate_pass));
   ui_back_put_text(7, 0, line);
 
-  sprintf(line, "READID [%c%c%c%c%c%c%c%c] %s",
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          results.read_id_pass ? '#' : '.',
-          pass_fail(results.read_id_pass));
+  sprintf(line, "SEEK   [%c%c%c%c%c%c%c%c] %s",
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        results.seek_pass ? '#' : '.',
+        pass_fail(results.seek_pass));
   ui_back_put_text(8, 0, line);
+
+  sprintf(line, "READID [%c%c%c%c%c%c%c%c] %s",
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        results.read_id_pass ? '#' : '.',
+        pass_fail(results.read_id_pass));
+  ui_back_put_text(9, 0, line);
 
   sprintf(line, "OVERALL [%c%c%c%c%c] %u/5 PASS",
           total > 0 ? '#' : '.',
@@ -828,7 +885,7 @@ static void ui_render_report_card(void) {
           total > 3 ? '#' : '.',
           total > 4 ? '#' : '.',
           total);
-  ui_back_put_text(10, 0, line);
+  ui_back_put_text(11, 0, line);
 
   ui_back_blit();
 }
@@ -836,7 +893,7 @@ static void ui_render_report_card(void) {
 
 static void ui_test_header(const char* title);
 
-#if COMPACT_UI
+#if 1
 static void ui_render_text_screen(const char* title,
                                   const char* controls,
                                   const char* const* lines,
@@ -972,13 +1029,14 @@ static void ui_render_rpm_loop_screen(unsigned int rpm,
 #endif
 
 static int read_key_blocking(void);
+static int read_enter_blocking(void);
 
 static void ui_test_header(const char* title) {
 #if COMPACT_UI && !HEADLESS_ROM_FONT
   /* Force compact 6x6-style font in human mode before drawing test screens. */
   ui_print_command_compact();
 #endif
-#if COMPACT_UI
+#if 1
   ui_term_clear();
   printf(" %s\n", title);
   printf("------------------------------\n");
@@ -1004,9 +1062,9 @@ static void ui_test_header(const char* title) {
 
 static void wait_for_menu_after_failure(void) {
   if (last_test_failed) {
-    printf("\nFAIL - PRESS ANY KEY FOR MENU\n");
+    printf("\nFAIL - PRESS ENTER FOR MENU\n");
     fflush(stdout);
-    read_key_blocking();
+    read_enter_blocking();
   }
 }
 
@@ -1061,17 +1119,18 @@ static unsigned char k_pressed(void) {
   return (unsigned char)((inportb(0xBFFE) & 0x04) == 0);
 }
 
+static unsigned char enter_pressed(void) {
+  return (unsigned char)((inportb(0xBFFE) & 0x01) == 0);
+}
+
 static unsigned short frame_ticks(void) {
   volatile unsigned char* frames = (volatile unsigned char*)0x5C78;
   return (unsigned short)(frames[0] | ((unsigned short)frames[1] << 8));
 }
 
-static unsigned char any_mapped_key_down(void) {
-  unsigned int i;
-  for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
-    if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) return 1;
+static void wait_for_key_release(unsigned short row_port, unsigned char bit_mask) {
+  while ((inportb(row_port) & bit_mask) == 0) {
   }
-  return 0;
 }
 
 static int read_key_blocking(void) {
@@ -1087,10 +1146,23 @@ static int read_key_blocking(void) {
     for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
       if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) {
         char key = keymap[i].key;
-        while (any_mapped_key_down()) {
-        }
+        wait_for_key_release(keymap[i].row_port, keymap[i].bit_mask);
         return key;
       }
+    }
+  }
+}
+
+static int read_enter_blocking(void) {
+  for (;;) {
+    if (break_pressed()) {
+      while (break_pressed()) {
+      }
+      return 27;
+    }
+    if (enter_pressed()) {
+      wait_for_key_release(0xBFFE, 0x01);
+      return '\n';
     }
   }
 }
@@ -1372,9 +1444,9 @@ static unsigned char wait_seek_complete(unsigned char drive,
 
 void press_any_key(int interactive) {
   if (interactive == 1) {
-    printf("\nPRESS ANY KEY\n");
+    printf("\nPRESS ENTER\n");
     fflush(stdout);
-    read_key_blocking();
+    read_enter_blocking();
   }
 }
 
@@ -1424,7 +1496,7 @@ static void test_motor_and_drive_status(int interactive) {
   lines[4] = line4;
   lines[5] = line5;
   ui_render_text_screen("MOTOR AND DRIVE STATUS",
-                        interactive ? "KEYS  : ANY KEY MENU" : "KEYS  : AUTO RETURN MENU",
+                        interactive ? "KEYS  : ENTER MENU" : "KEYS  : AUTO RETURN MENU",
                         lines,
                         6,
                         results.sense_drive_pass ? "RESULT: PASS" : "RESULT: FAIL");
@@ -1768,6 +1840,33 @@ static void test_read_id(int interactive) {
                         ok ? "RESULT: PASS" : "RESULT: FAIL");
 }
 
+static void render_track_loop_fail(unsigned char track,
+                                   unsigned int pass_count,
+                                   unsigned int fail_count,
+                                   const char* last1,
+                                   const char* last2) {
+  ui_render_track_loop_screen(track,
+                              pass_count,
+                              fail_count,
+                              last1,
+                              last2,
+                              "RESULT: FAIL");
+}
+
+static void render_rpm_loop_fail(unsigned int rpm,
+                                 unsigned int pass_count,
+                                 unsigned int fail_count,
+                                 const char* last1,
+                                 const char* last2) {
+  ui_render_rpm_loop_screen(rpm,
+                            rpm != 0,
+                            pass_count,
+                            fail_count,
+                            last1,
+                            last2,
+                            "RESULT: FAIL");
+}
+
 static void test_read_track_data_loop(void) {
   static unsigned char sector_data[1024];
   unsigned char st0 = 0, st1 = 0, st2 = 0;
@@ -1781,7 +1880,6 @@ static void test_read_track_data_loop(void) {
   unsigned int pass_count = 0;
   unsigned int fail_count = 0;
   unsigned int data_len;
-  unsigned int i;
   unsigned char pause_step;
   unsigned char exit_now;
   unsigned char need_ui_redraw = 1;
@@ -1791,15 +1889,6 @@ static void test_read_track_data_loop(void) {
   last_test_failed = 0;
 
   plus3_motor_on();
-
-  if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-    sprintf(ui_line1, "LAST  : DRIVE NR ST3=%02X", st3);
-    ui_render_track_loop_screen(track, pass_count, fail_count,
-                                ui_line1, "INFO  : CHECK MEDIA",
-                                "RESULT: FAIL");
-    plus3_motor_off();
-    return;
-  }
 
   for (;;) {
     if (loop_exit_requested()) break;
@@ -1833,19 +1922,25 @@ static void test_read_track_data_loop(void) {
       need_ui_redraw = 0;
     }
 
+    if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
+      fail_count++;
+      sprintf(ui_line1, "LAST  : DRIVE NR ST3=%02X", st3);
+      render_track_loop_fail(track, pass_count, fail_count, ui_line1, "INFO  : RETRYING");
+      need_seek = 1;
+      need_ui_redraw = 0;
+      delay_ms(20);
+      continue;
+    }
+
     if (need_seek) {
       if (!cmd_seek(FDC_DRIVE, 0, track) ||
           !wait_seek_complete(FDC_DRIVE, &st0, &c)) {
         fail_count++;
         sprintf(ui_line1, "LAST  : SEEK FAIL T=%u", track);
         sprintf(ui_line2, "INFO  : ST0=%02X", st0);
-        ui_render_track_loop_screen(track,
-                  pass_count,
-                  fail_count,
-                  ui_line1,
-                  ui_line2,
-                  "RESULT: FAIL");
-        need_ui_redraw = 1;
+        render_track_loop_fail(track, pass_count, fail_count, ui_line1, ui_line2);
+        need_seek = 1;
+        need_ui_redraw = 0;
         delay_ms(20);
         continue;
       }
@@ -1857,13 +1952,9 @@ static void test_read_track_data_loop(void) {
       fail_count++;
       sprintf(ui_line1, "LAST  : RID FAIL T=%u", track);
       sprintf(ui_line2, "INFO  : %s", read_id_failure_reason(st1, st2));
-      ui_render_track_loop_screen(track,
-                                  pass_count,
-                                  fail_count,
-                                  ui_line1,
-                                  ui_line2,
-                                  "RESULT: FAIL");
-      need_ui_redraw = 1;
+      render_track_loop_fail(track, pass_count, fail_count, ui_line1, ui_line2);
+      need_seek = 1;
+      need_ui_redraw = 0;
       delay_ms(20);
       continue;
     }
@@ -1872,13 +1963,13 @@ static void test_read_track_data_loop(void) {
     if (data_len == 0 || data_len > sizeof(sector_data)) {
       fail_count++;
       sprintf(ui_line1, "LAST  : RID N=%u BAD", n);
-      ui_render_track_loop_screen(track,
-                                  pass_count,
-                                  fail_count,
-                                  ui_line1,
-                                  "INFO  : INVALID SECTOR SIZE",
-                                  "RESULT: FAIL");
-      need_ui_redraw = 1;
+      render_track_loop_fail(track,
+                             pass_count,
+                             fail_count,
+                             ui_line1,
+                             "INFO  : INVALID SECTOR SIZE");
+      need_seek = 1;
+      need_ui_redraw = 0;
       delay_ms(20);
       continue;
     }
@@ -1888,13 +1979,9 @@ static void test_read_track_data_loop(void) {
       fail_count++;
       sprintf(ui_line1, "LAST  : READ FAIL T=%u", track);
       sprintf(ui_line2, "INFO  : %s", read_id_failure_reason(rd1, rd2));
-      ui_render_track_loop_screen(track,
-                  pass_count,
-                  fail_count,
-                  ui_line1,
-                  ui_line2,
-                  "RESULT: FAIL");
-      need_ui_redraw = 1;
+      render_track_loop_fail(track, pass_count, fail_count, ui_line1, ui_line2);
+      need_seek = 1;
+      need_ui_redraw = 0;
       delay_ms(20);
       continue;
     }
@@ -1961,36 +2048,21 @@ static void test_rpm_checker(void) {
     if (pass_count + fail_count >= 3U) break;
 #endif
 
-  ui_render_rpm_loop_screen(rpm,
-          rpm != 0,
-          pass_count,
-                  fail_count,
-                  "LAST  : WAITING",
-                  "INFO  : SEEK+READID",
-                  "RESULT: ACTIVE");
-
     if (!cmd_seek(FDC_DRIVE, 0, 0) || !wait_seek_complete(FDC_DRIVE, &st0, &c)) {
       fail_count++;
-    ui_render_rpm_loop_screen(rpm,
-                rpm != 0,
-                pass_count,
-                                fail_count,
-                                "LAST  : SEEK TRACK0 FAIL",
-                                "INFO  : ST0 SET",
-                                "RESULT: FAIL");
+      render_rpm_loop_fail(rpm,
+                           pass_count,
+                           fail_count,
+                           "LAST  : SEEK TRACK0 FAIL",
+                           "INFO  : ST0 SET");
       delay_ms(RPM_FAIL_DELAY_MS);
       continue;
     }
 
     if (!cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n)) {
       fail_count++;
-      ui_render_rpm_loop_screen(rpm,
-                                rpm != 0,
-                                pass_count,
-                                fail_count,
-                                "LAST  : ID FAIL",
-                                read_id_failure_reason(st1, st2),
-                                "RESULT: FAIL");
+      render_rpm_loop_fail(
+          rpm, pass_count, fail_count, "LAST  : ID FAIL", read_id_failure_reason(st1, st2));
       delay_ms(RPM_FAIL_DELAY_MS);
       continue;
     }
@@ -2028,13 +2100,8 @@ static void test_rpm_checker(void) {
 
     if (dticks == 0) {
       fail_count++;
-      ui_render_rpm_loop_screen(rpm,
-                                rpm != 0,
-                                pass_count,
-                                fail_count,
-                                "LAST  : RPM N/A",
-                                seen_other ? "NO REV MARK" : "SAME SEC",
-                                "RESULT: FAIL");
+      render_rpm_loop_fail(
+          rpm, pass_count, fail_count, "LAST  : RPM N/A", seen_other ? "NO REV MARK" : "SAME SEC");
       delay_ms(RPM_FAIL_DELAY_MS);
       continue;
     }
@@ -2042,29 +2109,24 @@ static void test_rpm_checker(void) {
     period_ms = (unsigned int)dticks * 20U;
     if (period_ms == 0) {
       fail_count++;
-      ui_render_rpm_loop_screen(rpm,
-                                rpm != 0,
-                                pass_count,
-                                fail_count,
-                                "LAST  : PERIOD BAD",
-                                "INFO  : ZERO DELTA",
-                                "RESULT: FAIL");
+      render_rpm_loop_fail(rpm,
+                           pass_count,
+                           fail_count,
+                           "LAST  : PERIOD BAD",
+                           "INFO  : ZERO DELTA");
       delay_ms(RPM_FAIL_DELAY_MS);
       continue;
     }
 
     rpm = (unsigned int)((60000U + (period_ms / 2U)) / period_ms);
     pass_count++;
-    {
-      ui_render_rpm_loop_screen(
-          rpm,
-          1,
-          pass_count,
-          fail_count,
-          "LAST  : SAMPLE OK",
-          "INFO  : PERIOD READY",
-          (rpm >= 285U && rpm <= 315U) ? "RESULT: PASS" : "RESULT: OUT-OF-RANGE");
-    }
+    ui_render_rpm_loop_screen(rpm,
+                              1,
+                              pass_count,
+                              fail_count,
+                              "LAST  : SAMPLE OK",
+                              "INFO  : PERIOD READY",
+                              (rpm >= 285U && rpm <= 315U) ? "RESULT: PASS" : "RESULT: OUT-OF-RANGE");
     delay_ms(RPM_LOOP_DELAY_MS);
   }
 
@@ -2089,16 +2151,40 @@ static void print_results(void) {
 
 static void run_all_tests(unsigned char human_mode) {
   memset(&results, 0, sizeof(results));
+  reset_report_progress();
   last_test_failed = 0;
+
+  set_report_status(REPORT_STATUS_READY);
+  ui_render_report_card();
+  if (human_mode) delay_ms(500);
+
+  set_report_status(REPORT_STATUS_RUNNING);
+  if (human_mode) delay_ms(250);
   test_motor_and_drive_status(0);
+  set_report_status(REPORT_STATUS_COMPLETE);
+  ui_render_report_card();
   if (human_mode) delay_ms(1200);
+
+  set_report_status(REPORT_STATUS_RUNNING);
+  if (human_mode) delay_ms(250);
   test_read_id_probe();
+  set_report_status(REPORT_STATUS_COMPLETE);
+  ui_render_report_card();
   if (human_mode) delay_ms(1200);
+
+  set_report_status(REPORT_STATUS_RUNNING);
+  if (human_mode) delay_ms(250);
   test_recal_seek_track2(0);
+  set_report_status(REPORT_STATUS_COMPLETE);
+  ui_render_report_card();
   if (human_mode) delay_ms(1200);
+
+  set_report_status(REPORT_STATUS_RUNNING);
+  if (human_mode) delay_ms(250);
   test_read_id(0);
-  if (human_mode) delay_ms(1200);
+  set_report_status(REPORT_STATUS_COMPLETE);
   print_results();
+  if (human_mode) delay_ms(1200);
   last_test_failed = (unsigned char)(pass_count() < 5U);
 }
 
@@ -2124,6 +2210,7 @@ int main(void) {
   set_motor_off();
 
   memset(&results, 0, sizeof(results));
+  reset_report_progress();
   disable_terminal_auto_pause();
 #if DEBUG_ENABLED
   printf("DEBUG BUILD\n");
@@ -2140,16 +2227,18 @@ int main(void) {
 
     if (ch == MENU_KEY_UP) {
       if (selected_menu > 0) {
+        unsigned char old_selected = selected_menu;
         selected_menu--;
-        menu_print_with_selection(selected_menu);
+        ui_update_main_menu_selection(old_selected, selected_menu);
       }
       continue;
     }
 
     if (ch == MENU_KEY_DOWN) {
       if (selected_menu + 1 < menu_item_count()) {
+        unsigned char old_selected = selected_menu;
         selected_menu++;
-        menu_print_with_selection(selected_menu);
+        ui_update_main_menu_selection(old_selected, selected_menu);
       }
       continue;
     }
@@ -2215,6 +2304,7 @@ int main(void) {
         break;
       case 'C':
         memset(&results, 0, sizeof(results));
+        reset_report_progress();
         printf("RESULTS CLEARED\n");
         press_any_key(1);
         menu_dirty = 1;
