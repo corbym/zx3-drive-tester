@@ -142,7 +142,7 @@ def fail_fast_ui_source_regressions(repo_root: Path) -> None:
 
     text = source_path.read_text(encoding="utf-8", errors="replace")
     required_snippets = (
-        "press_any_key(selected_test_prompt_mode(interactive));",
+        "wait_after_test_run(1);",
         "#define RUN_ALL_RESULT_DELAY_MS 1800U",
         "ui_render_cached_text_row",
         "ui_style_screen_text_row",
@@ -699,11 +699,13 @@ def wait_for_menu_after_runall_with_progress(
     timeout: float,
     interval: float,
     min_report_frames: int,
+    key_delay_ms: int,
 ) -> tuple[str, list[str]]:
     deadline = time.time() + timeout
     last_text = ""
     report_frames: list[str] = []
     seen_report_frames: set[str] = set()
+    sent_enter_on_complete = False
 
     while time.time() < deadline:
         last_text = client.ocr()
@@ -713,6 +715,10 @@ def wait_for_menu_after_runall_with_progress(
             if clean not in seen_report_frames:
                 seen_report_frames.add(clean)
                 report_frames.append(clean)
+
+            if "STATUS: COMPLETE" in clean and not sent_enter_on_complete:
+                client.command(f"send-keys-ascii {key_delay_ms} 13")
+                sent_enter_on_complete = True
 
         if all(marker in clean for marker in MENU_MARKERS):
             if len(report_frames) < min_report_frames:
@@ -1162,6 +1168,7 @@ def main() -> int:
             args.run_timeout,
             ocr_poll_s,
             min_report_frames=3,
+            key_delay_ms=key_delay_ms,
         )
         snapshots.append(snapshot_state(client, "after-run-all"))
         if artifacts_dir is not None:
