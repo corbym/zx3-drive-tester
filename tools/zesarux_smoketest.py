@@ -705,7 +705,7 @@ def wait_for_menu_after_runall_with_progress(
     last_text = ""
     report_frames: list[str] = []
     seen_report_frames: set[str] = set()
-    sent_enter_on_complete = False
+    last_enter_sent_at = 0.0
 
     while time.time() < deadline:
         last_text = client.ocr()
@@ -716,9 +716,11 @@ def wait_for_menu_after_runall_with_progress(
                 seen_report_frames.add(clean)
                 report_frames.append(clean)
 
-            if "STATUS: COMPLETE" in clean and not sent_enter_on_complete:
-                client.command(f"send-keys-ascii {key_delay_ms} 13")
-                sent_enter_on_complete = True
+            if "STATUS: COMPLETE" in clean:
+                now = time.time()
+                if now - last_enter_sent_at >= 0.4:
+                    client.command(f"send-keys-ascii {key_delay_ms} 13")
+                    last_enter_sent_at = now
 
         if all(marker in clean for marker in MENU_MARKERS):
             if len(report_frames) < min_report_frames:
