@@ -65,33 +65,13 @@ jobs:
             zx3-disk-test:ci \
             bash -c "cd /workspace && ./deploy.sh"
 
-      - name: Run smoke test
-        run: |
-          for attempt in 1 2; do
-            echo "--- Smoke attempt ${attempt}/2 ---"
-            docker run --rm \
-              -v ${{ github.workspace }}:/workspace \
-              zx3-disk-test:ci \
-              bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --run-timeout 180 --headless --log-ocr --ocr-artifacts-dir out/smoke-artifacts --emulator-binary /usr/local/bin/zesarux" \
-            && { echo "Smoke passed on attempt ${attempt}"; exit 0; }
-            echo "Attempt ${attempt} failed"
-          done
-          exit 1
-
-      - name: Run compact menu smoke capture
-        if: github.ref == 'refs/heads/main'
+      - name: Run smoke tests
         run: |
           docker run --rm \
+            -e ZX3_REQUIRE_EMU_SMOKE=1 \
             -v ${{ github.workspace }}:/workspace \
             zx3-disk-test:ci \
-            bash -c "cd /workspace && ./tools/zesarux_smoketest.py --no-build --machine P340 --headless --menu-only --no-dsk --compact-ui on --log-ocr --ocr-artifacts-dir out/smoke-artifacts-compact --emulator-binary /usr/local/bin/zesarux"
-
-      - name: Run screen-check capture
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            zx3-disk-test:ci \
-            bash -c "cd /workspace && python3 ./tools/_screen_check.py --headless --emulator-binary /usr/local/bin/zesarux"
+            bash -c "cd /workspace && ./run_tests.sh"
 
       - name: Create and push semver tag
         id: tag_semver
@@ -141,8 +121,6 @@ jobs:
           path: |
             out/disk_tester.tap
             out/disk_tester_plus3.dsk
-            out/smoke-artifacts/**
-            out/smoke-artifacts-compact/**
             out/screen-check/**
           if-no-files-found: error
 

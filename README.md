@@ -77,52 +77,26 @@ zcc +zx -vn -clib=new -create-app disk_tester.c menu_system.c intstate.asm -o ./
 3. Boot your +3 with DivMMC, select the TAP file to load
 4. Use the on-screen menu to run tests
 
-### In emulator (ZEsarUX)
+### Smoke tests (ZEsarUX emulator)
 
 ```sh
-./tools/zesarux_smoketest.py [--debug-mode on|off]
+./run_tests.sh
 ```
 
-The harness loads the tester program from the TAP file and mounts a DSK image for disk read tests.
+Requires `zesarux` on your PATH (or set `ZESARUX_BIN` to the binary path). If the emulator is not available the emulator-driven tests are skipped, unless `ZX3_REQUIRE_EMU_SMOKE=1` is set (used in CI to enforce they run).
 
-**Options:**
-- `--debug-mode on` – Build the tester with compile-time debug output enabled
-- `--debug-mode off` – Build the normal tester (default)
-- `--compact-ui on` – Build with compact display font for human viewing
-- `--compact-ui off` – Build with OCR-safe default font (default)
-- `--log-ocr` – Print key OCR captures to stdout for CI/build logs
-- `--ocr-artifacts-dir out/smoke-artifacts` – Write OCR snapshots and text captures
-- `--machine P340` – Use ZX +3, 40-track drive (default)
-- `--run-timeout 120` – Maximum seconds to wait for test completion
-- `--no-build` – Skip build and use existing TAP
-- `--dsk out/disk_tester_plus3.dsk` – DSK image mounted in drive A
-- `--no-dsk` – Disable DSK mounting
-- `--menu-only` – Load to menu, capture artifacts, and exit (for human screenshot review)
-- `--max-bss-uninitialized-tail 0xFEFF` – Fail fast if the map file shows a BSS regression past the configured address
-- `--allow-screen-backbuffers` – Override the default smoke guard that fails if `_ui_back_pixels` or `_ui_back_attrs` reappear
-- `--check-track-loop-status` – Run an extra regression check that opens the track-loop test, verifies the initial status page appears, then verifies a populated status page appears
-
-**Example:**
-```sh
-./tools/zesarux_smoketest.py --debug-mode on
-```
-
-The harness will:
-1. Build the project
-2. Fail fast if the generated map file shows a known memory-pressure regression
-3. Start ZEsarUX in +3 mode
-4. Load the TAP file
-5. Load the DSK test image for drive tests
-6. Optionally verify that a selected loop test shows its status page before and after live data appears
-7. Validate menu interactions and menu-return regressions (including stray bad-key output)
-8. Run all tests (`A` key)
-9. Capture and display results via OCR
-10. Clean up and exit
+The test suite:
+1. Builds the project (`./build.sh`)
+2. Starts ZEsarUX in headless +3 mode
+3. Loads the TAP file and validates the main menu appears
+4. Exercises key menu paths and validates UI responses via OCR
+5. Runs all disk tests end-to-end and checks for 5/5 PASS status
+6. Captures staged UI screenshots to `out/screen-check/` to verify screen-clear behaviour
+7. Stops the emulator and reports results
 
 Notes:
 - `save-screen` via ZRCP supports `bmp`, `scr`, and `pbm` output formats.
-- Smoke runs now fail before emulator startup if the built map file shows the old memory-pressure signature.
-- CI captures OCR artifacts from a full smoke run plus a compact menu-only capture for human review.
+- Screenshot artifacts land in `out/screen-check/` and are uploaded by CI.
 
 ## Read ID Result Notes
 
@@ -159,18 +133,18 @@ A `Dockerfile` is provided that includes z88dk, ZEsarUX, and Python dependencies
 docker build -t zx3-disk-test:latest .
 ```
 
-### Run smoke test in Docker
+### Run smoke tests in Docker
 
 ```sh
-docker run --rm zx3-disk-test:latest \
-  bash -c "cd /workspace && ./tools/zesarux_smoketest.py --machine P340 --run-timeout 180 --headless"
+docker run --rm -e ZX3_REQUIRE_EMU_SMOKE=1 zx3-disk-test:latest \
+  bash -c "cd /workspace && ./run_tests.sh"
 ```
 
 Or with volume mount to use your local checkout:
 
 ```sh
-docker run --rm -v $(pwd):/workspace zx3-disk-test:latest \
-  bash -c "cd /workspace && ./tools/zesarux_smoketest.py --machine P340 --run-timeout 180"
+docker run --rm -e ZX3_REQUIRE_EMU_SMOKE=1 -v $(pwd):/workspace zx3-disk-test:latest \
+  bash -c "cd /workspace && ./run_tests.sh"
 ```
 
 ### GitHub Actions
@@ -180,9 +154,9 @@ The repository includes three GitHub Actions workflows:
 2. `.github/workflows/smoke-test.yml` pulls that prebuilt image for normal CI runs and only falls back to a local build if the image is missing
 3. `.github/workflows/manual-release.yml` supports release packaging/tag flow
 
-The smoke workflow runs on pushes and PRs to `main`, `master`, and `develop`, executes a full headless smoke run, then executes a compact menu-only capture without rebuilding.
+The smoke workflow runs on pushes and PRs to `main`, `master`, and `develop`. It builds the project artifacts and runs the C smoke test suite (including staged UI screenshot capture to `out/screen-check/`) in the prebuilt Docker image.
 
-The workflow uses `--headless` mode to run without a display.
+The workflow runs with `ZX3_REQUIRE_EMU_SMOKE=1` to enforce that emulator-driven tests must pass.
 
 ## Notes
 
@@ -196,7 +170,10 @@ The workflow uses `--headless` mode to run without a display.
 - `disk_tester.h` – Helper declarations
 - `intstate.asm` – Low-level port I/O and motor control (Z80 assembly)
 - `build.sh` – Build script
-- `tools/zesarux_smoketest.py` – Automated test harness with OCR validation
+- `run_tests.sh` – Compile and run the smoke test suite
+- `tests/emulator_harness.{c,h}` – Low-level ZEsarUX process and ZRCP socket primitives
+- `tests/emulator_client.{c,h}` – Emulator client (lifecycle + high-level ZRCP operations)
+- `tests/test_smoke_emulator.c` – Emulator-driven smoke test suite
 
 ## License
 
