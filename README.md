@@ -83,7 +83,7 @@ zcc +zx -vn -clib=new -create-app disk_tester.c menu_system.c intstate.asm -o ./
 ./run_tests.sh
 ```
 
-Requires `zesarux` on your PATH (or set `ZESARUX_BIN` to the binary path). If the emulator is not available the emulator-driven tests are skipped, unless `ZX3_REQUIRE_EMU_SMOKE=1` is set (used in CI to enforce they run).
+Requires `zesarux` on your PATH (or set `ZESARUX_BIN` to the binary path) and a working Go toolchain. If the emulator is not available the emulator-driven tests are skipped, unless `ZX3_REQUIRE_EMU_SMOKE=1` is set (used in CI to enforce they run).
 
 The test suite:
 1. Builds the project (`./build.sh`)
@@ -154,7 +154,7 @@ The repository includes three GitHub Actions workflows:
 2. `.github/workflows/smoke-test.yml` pulls that prebuilt image for normal CI runs and only falls back to a local build if the image is missing
 3. `.github/workflows/manual-release.yml` supports release packaging/tag flow
 
-The smoke workflow runs on pushes and PRs to `main`, `master`, and `develop`. It builds the project artifacts and runs the C smoke test suite (including staged UI screenshot capture to `out/screen-check/`) in the prebuilt Docker image.
+The smoke workflow runs on pushes and PRs to `main`, `master`, and `develop`. It builds the project artifacts and runs the Go smoke test suite (including staged UI screenshot capture to `out/screen-check/`) in the prebuilt Docker image.
 
 The workflow runs with `ZX3_REQUIRE_EMU_SMOKE=1` to enforce that emulator-driven tests must pass.
 
@@ -170,10 +170,10 @@ The workflow runs with `ZX3_REQUIRE_EMU_SMOKE=1` to enforce that emulator-driven
 - `disk_tester.h` – Helper declarations
 - `intstate.asm` – Low-level port I/O and motor control (Z80 assembly)
 - `build.sh` – Build script
-- `run_tests.sh` – Compile and run the smoke test suite
-- `tests/emulator_harness.{c,h}` – Low-level ZEsarUX process and ZRCP socket primitives
-- `tests/emulator_client.{c,h}` – Emulator client (lifecycle + high-level ZRCP operations)
-- `tests/test_smoke_emulator.c` – Emulator-driven smoke test suite
+- `run_tests.sh` – Run the Go smoke test suite (`go test ./tests`)
+- `tests/emulator_harness.go` – Low-level ZEsarUX process and ZRCP socket primitives
+- `tests/emulator_client.go` – Emulator client (lifecycle + high-level ZRCP operations)
+- `tests/smoke_emulator_test.go` – Emulator-driven smoke test suite
 
 ## License
 

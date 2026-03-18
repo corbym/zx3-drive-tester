@@ -41,7 +41,12 @@ jobs:
         run: |
           if docker pull "${{ steps.image.outputs.ref }}"; then
             docker tag "${{ steps.image.outputs.ref }}" zx3-disk-test:ci
-            echo "source=pulled" >> "$GITHUB_OUTPUT"
+            if docker run --rm zx3-disk-test:ci go version >/dev/null 2>&1; then
+              echo "source=pulled" >> "$GITHUB_OUTPUT"
+            else
+              echo "Pulled image missing Go toolchain, forcing local build"
+              echo "source=built" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "source=built" >> "$GITHUB_OUTPUT"
           fi
