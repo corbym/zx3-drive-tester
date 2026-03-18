@@ -91,9 +91,9 @@ static void delay_ms(unsigned int ms) {
 #define READ_LOOP_PAUSE_STEPS 4U
 #define READ_LOOP_PAUSE_MS 6U
 #define TEST_CARD_STATE_DELAY_MS 90U
-#define RUN_ALL_READY_DELAY_MS 700U
-#define RUN_ALL_RUNNING_DELAY_MS 350U
-#define RUN_ALL_RESULT_DELAY_MS 1800U
+#define RUN_ALL_READY_DELAY_MS 150U
+#define RUN_ALL_RUNNING_DELAY_MS 120U
+#define RUN_ALL_RESULT_DELAY_MS 220U
 
 /* Approximate sub-millisecond pacing for FDC byte gaps. */
 static void delay_us_approx(unsigned int us) {
@@ -864,6 +864,11 @@ static const KeyMap keymap[] = {
     {0xFBFE, 0x01, 'Q'}, {0xFBFE, 0x08, 'R'}, {0x7FFE, 0x01, ' '},
     {0xBFFE, 0x01, '\n'}};
 
+  enum { RUNTIME_KEYMAP_COUNT = sizeof(keymap) / sizeof(keymap[0]) };
+  static unsigned char runtime_key_latched[RUNTIME_KEYMAP_COUNT];
+  static unsigned char runtime_break_latched;
+  static int runtime_pending_key = -1;
+
 static unsigned char break_pressed(void) {
   unsigned char caps_shift = (unsigned char)(inportb(0xFEFE) & 0x01);
   unsigned char space = (unsigned char)(inportb(0x7FFE) & 0x01);
@@ -891,42 +896,80 @@ static unsigned short frame_ticks(void) {
   return (unsigned short)(frames[0] | ((unsigned short)frames[1] << 8));
 }
 
-static void wait_for_key_release(unsigned short row_port,
-                                 unsigned char bit_mask) {
-  while ((inportb(row_port) & bit_mask) == 0) {
+static int scan_runtime_key_event(void) {
+  unsigned int i;
+  unsigned char pressed;
+
+  if (break_pressed()) {
+    if (!runtime_break_latched) {
+      runtime_break_latched = 1;
+      return 27;
+    }
+  } else {
+    runtime_break_latched = 0;
+  }
+
+  for (i = 0; i < RUNTIME_KEYMAP_COUNT; i++) {
+    pressed =
+        (unsigned char)((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0);
+    if (pressed) {
+      if (runtime_key_latched[i]) {
+        continue;
+      }
+      runtime_key_latched[i] = 1;
+      return keymap[i].key;
+    }
+    runtime_key_latched[i] = 0;
+  }
+
+  return -1;
+}
+
+static void pump_runtime_key_latch(void) {
+  if (runtime_pending_key == -1) {
+    runtime_pending_key = scan_runtime_key_event();
+  }
+}
+
+static int pop_runtime_pending_key(void) {
+  int key = runtime_pending_key;
+  runtime_pending_key = -1;
+  return key;
+}
+
+static void delay_ms_pump_keys(unsigned int ms) {
+  const unsigned int slice_ms = 50U;
+  while (ms >= slice_ms) {
+    pump_runtime_key_latch();
+    delay_ms(slice_ms);
+    ms = (unsigned int)(ms - slice_ms);
+  }
+  if (ms > 0U) {
+    pump_runtime_key_latch();
+    delay_ms(ms);
   }
 }
 
 static int read_key_blocking(void) {
-  unsigned int i;
-
   for (;;) {
-    if (break_pressed()) {
-      while (break_pressed()) {
-      }
-      return 27;
-    }
-
-    for (i = 0; i < sizeof(keymap) / sizeof(keymap[0]); i++) {
-      if ((inportb(keymap[i].row_port) & keymap[i].bit_mask) == 0) {
-        char key = keymap[i].key;
-        wait_for_key_release(keymap[i].row_port, keymap[i].bit_mask);
-        return key;
-      }
+    pump_runtime_key_latch();
+    if (runtime_pending_key != -1) {
+      return pop_runtime_pending_key();
     }
   }
 }
 
 static int read_enter_blocking(void) {
+  int key;
+
   for (;;) {
-    if (break_pressed()) {
-      while (break_pressed()) {
-      }
-      return 27;
+    pump_runtime_key_latch();
+    if (runtime_pending_key == -1) {
+      continue;
     }
-    if (enter_pressed()) {
-      wait_for_key_release(0xBFFE, 0x01);
-      return '\n';
+    key = pop_runtime_pending_key();
+    if (key == 27 || key == '\n') {
+      return key;
     }
   }
 }
@@ -1923,35 +1966,35 @@ static void run_all_tests(unsigned char human_mode) {
 
   set_report_status(REPORT_STATUS_READY);
   ui_render_report_card();
-  if (human_mode) delay_ms(RUN_ALL_READY_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_READY_DELAY_MS);
 
   set_report_status(REPORT_STATUS_RUNNING);
-  if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_MS);
   test_motor_and_drive_status(0);
   set_report_status(REPORT_STATUS_COMPLETE);
   ui_render_report_card();
-  if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_MS);
 
   set_report_status(REPORT_STATUS_RUNNING);
-  if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_MS);
   test_read_id_probe(0);
   set_report_status(REPORT_STATUS_COMPLETE);
   ui_render_report_card();
-  if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_MS);
 
   set_report_status(REPORT_STATUS_RUNNING);
-  if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_MS);
   test_recal_seek_track2(0);
   set_report_status(REPORT_STATUS_COMPLETE);
   ui_render_report_card();
-  if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_MS);
 
   set_report_status(REPORT_STATUS_RUNNING);
-  if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_MS);
   test_read_id(0);
   set_report_status(REPORT_STATUS_COMPLETE);
   print_results();
-  if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_MS);
+  if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_MS);
   last_test_failed = (unsigned char)(pass_count() < 5U);
 }
 

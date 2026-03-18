@@ -165,21 +165,13 @@ func TestRunAllCompletes(t *testing.T) {
 		ocr, err := c.OCR()
 		if err == nil {
 			lastOCR = ocr
-			if containsAll(ocr, "ZX +3 DISK TESTER", "STATUS: 5/5 PASS") {
-				return
-			}
-			if containsAll(ocr, "MOTOR AND DRIVE STATUS", "RESULT:") {
-				/* Key dispatch is active and diagnostics launched; avoid flaky hard-fail. */
-				return
-			}
 			if containsAll(ocr, "TEST REPORT CARD", "STATUS: COMPLETE") {
-				_ = c.SendKey(13)
 				return
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for run-all transition\nlast OCR:\n%s", lastOCR)
+	t.Fatalf("timed out waiting for run-all completion\nlast OCR:\n%s", lastOCR)
 }
 
 func TestMotorStatusMenu(t *testing.T) {
@@ -198,12 +190,15 @@ func TestMotorStatusMenu(t *testing.T) {
 		}
 		if ocr, err := c.OCR(); err == nil {
 			lastOCR = ocr
+			if containsAll(ocr, "MOTOR AND DRIVE STATUS", "RESULT:") {
+				return
+			}
 		}
-		if _, err := c.WaitForOCR(1500*time.Millisecond, "Motor", "Status"); err == nil {
+		if _, err := c.WaitForOCR(1500*time.Millisecond, "MOTOR AND DRIVE STATUS", "RESULT:"); err == nil {
 			return
 		}
 	}
-	t.Skipf("motor status screen did not appear in time (known flake)\nlast OCR:\n%s", lastOCR)
+	t.Fatalf("motor status screen did not appear in time\nlast OCR:\n%s", lastOCR)
 }
 
 func TestScreenCaptureStages(t *testing.T) {

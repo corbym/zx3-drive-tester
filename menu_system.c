@@ -48,6 +48,12 @@ static const KeyMap menu_keymap[] = {
     {0xEFFE, 0x08, '7'},
 };
 
+  enum { MENU_KEYMAP_COUNT = sizeof(menu_keymap) / sizeof(menu_keymap[0]) };
+  static unsigned char menu_key_latched[MENU_KEYMAP_COUNT];
+  static unsigned char menu_break_latched;
+  static unsigned char menu_up_latched;
+  static unsigned char menu_down_latched;
+
 static unsigned char break_pressed(void) {
   unsigned char caps_shift = (unsigned char)(inportb(0xFEFE) & 0x01);
   unsigned char space = (unsigned char)(inportb(0x7FFE) & 0x01);
@@ -92,21 +98,6 @@ static unsigned char menu_down_pressed(void) {
                          s_pressed() || v_pressed());
 }
 
-static void wait_for_key_release(unsigned short row_port, unsigned char bit_mask) {
-  while ((inportb(row_port) & bit_mask) == 0) {
-  }
-}
-
-static void wait_for_menu_up_release(void) {
-  while (menu_up_pressed()) {
-  }
-}
-
-static void wait_for_menu_down_release(void) {
-  while (menu_down_pressed()) {
-  }
-}
-
 const MenuItem *menu_items(void) { return MENU_ITEMS; }
 
 unsigned char menu_item_count(void) {
@@ -135,32 +126,52 @@ unsigned char menu_index_for_key(char key, unsigned char *found) {
 
 int read_menu_key_blocking(void) {
   unsigned int i;
+  unsigned char pressed;
 
   for (;;) {
     if (break_pressed()) {
-      while (break_pressed()) {
+      if (!menu_break_latched) {
+        menu_break_latched = 1;
+        return 27;
       }
-      return 27;
+    } else {
+      menu_break_latched = 0;
     }
 
     if (menu_up_pressed()) {
-      wait_for_menu_up_release();
-      return MENU_KEY_UP;
+      if (!menu_up_latched) {
+        menu_up_latched = 1;
+        return MENU_KEY_UP;
+      }
+    } else {
+      menu_up_latched = 0;
     }
 
     if (menu_down_pressed()) {
-      wait_for_menu_down_release();
-      return MENU_KEY_DOWN;
+      if (!menu_down_latched) {
+        menu_down_latched = 1;
+        return MENU_KEY_DOWN;
+      }
+    } else {
+      menu_down_latched = 0;
     }
 
-    for (i = 0; i < sizeof(menu_keymap) / sizeof(menu_keymap[0]); i++) {
-      if ((inportb(menu_keymap[i].row_port) & menu_keymap[i].bit_mask) == 0) {
-        char key = menu_keymap[i].key;
-        wait_for_key_release(menu_keymap[i].row_port, menu_keymap[i].bit_mask);
-        if (key == 'F' || key == 'W') return MENU_KEY_UP;
-        if (key == 'V' || key == 'S') return MENU_KEY_DOWN;
-        return key;
+    for (i = 0; i < MENU_KEYMAP_COUNT; i++) {
+      pressed = (unsigned char)((inportb(menu_keymap[i].row_port) &
+                                 menu_keymap[i].bit_mask) == 0);
+      if (pressed) {
+        if (menu_key_latched[i]) {
+          continue;
+        }
+        menu_key_latched[i] = 1;
+        {
+          char key = menu_keymap[i].key;
+          if (key == 'F' || key == 'W') return MENU_KEY_UP;
+          if (key == 'V' || key == 'S') return MENU_KEY_DOWN;
+          return key;
+        }
       }
+      menu_key_latched[i] = 0;
     }
   }
 }
