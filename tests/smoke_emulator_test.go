@@ -270,6 +270,7 @@ func TestScreenCaptureStages(t *testing.T) {
 		key         byte
 		waitFor     []string
 		waitTimeout time.Duration
+		settleDelay time.Duration
 		enterToMenu bool
 	}
 
@@ -279,6 +280,7 @@ func TestScreenCaptureStages(t *testing.T) {
 			captureFile: "01_menu.bmp",
 			waitFor:     []string{"ZX +3 DISK TESTER", "ENTER: SELECT"},
 			waitTimeout: 10 * time.Second,
+			settleDelay: 500 * time.Millisecond,
 		},
 		{
 			name:        "motor status",
@@ -332,6 +334,10 @@ func TestScreenCaptureStages(t *testing.T) {
 			if _, err := c.WaitForOCR(stage.waitTimeout, stage.waitFor...); err != nil {
 				t.Fatalf("timed out waiting for %s: %v", stage.name, err)
 			}
+		}
+
+		if stage.settleDelay > 0 {
+			time.Sleep(stage.settleDelay)
 		}
 
 		captureChecked(stage.captureFile)
