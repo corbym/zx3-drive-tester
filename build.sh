@@ -1,7 +1,4 @@
 set -e
-if [ ${CLEAN_BUILD:-0} != 0 ]; then
-  rm -rf out
-fi
 
 rm -rf out
 mkdir -p out
