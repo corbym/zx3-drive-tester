@@ -179,6 +179,22 @@ func TestReportCardOpens(t *testing.T) {
 	}
 }
 
+func TestReportCardRendersPromptly(t *testing.T) {
+	c := requireSuiteClient(t)
+	resetAndLoadTap(t, c)
+	waitForMenu(t, c, 30*time.Second)
+	if err := c.SendKey('R'); err != nil {
+		t.Fatalf("failed to send R key: %v", err)
+	}
+	// Tight 3-second window.  The optimised render path (memset-based attr_fill
+	// and scanline memset in fill_row) paints the report card in well under a
+	// second.  The slow loop path (~768 ui_attr_set_cell + ~1664 per-row calls)
+	// would add ~500 ms at Z80 speed and reliably exceed this budget.
+	if _, err := c.WaitForOCR(3*time.Second, "TEST REPORT CARD", "OVERALL ["); err != nil {
+		t.Fatalf("report card did not appear within 3 s — rendering regression likely (slow attr_fill/fill_row loop reintroduced?): %v", err)
+	}
+}
+
 func TestReturnToMenuFromReport(t *testing.T) {
 	c := requireSuiteClient(t)
 	resetAndLoadTap(t, c)
