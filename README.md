@@ -30,6 +30,8 @@ Targets the **ZX Spectrum +3** internal floppy system:
 | `0x2FFD` | FDC MSR | Read | Floppy controller main status register |
 | `0x3FFD` | FDC Data | Read/Write | Floppy controller data register |
 
+> **uPD765A read completion note**: on Spectrum +3 hardware, software cannot drive the FDC Terminal Count (TC) line. A successful `READ DATA` may therefore finish with `ST0.IC=01` and `ST1.EN=1` (instead of clean zero status). The tester treats this specific pattern as success when no other error bits are present.
+
 ## Build
 
 ### Prerequisites
