@@ -300,10 +300,15 @@ static void select_rom_font(void) {
 /* Test results storage */
 typedef struct {
   unsigned char motor_test_pass;
+  unsigned char motor_test_ran;
   unsigned char sense_drive_pass;
+  unsigned char sense_drive_ran;
   unsigned char recalibrate_pass;
+  unsigned char recalibrate_ran;
   unsigned char seek_pass;
+  unsigned char seek_ran;
   unsigned char read_id_pass;
+  unsigned char read_id_ran;
 } TestResults;
 
 static TestResults results;
@@ -376,6 +381,7 @@ static void ui_term_clear(void) {
 #define ZX_COLOUR_BLACK 0
 #define ZX_COLOUR_BLUE 1
 #define ZX_COLOUR_RED 2
+#define ZX_COLOUR_GREEN 4
 #define ZX_COLOUR_WHITE 7
 #define ZX_COLOUR_CYAN 5
 #define ZX_COLOUR_YELLOW 6
@@ -690,20 +696,45 @@ static void ui_render_main_menu(unsigned char selected_index,
   }
 }
 
-static void build_report_bar(unsigned char ok, char out[9]) {
+#define REPORT_ROW_NOT_RUN 0U
+#define REPORT_ROW_PASS 1U
+#define REPORT_ROW_FAIL 2U
+
+static unsigned char report_row_state(unsigned char ran, unsigned char pass) {
+  if (!ran) return REPORT_ROW_NOT_RUN;
+  return pass ? REPORT_ROW_PASS : REPORT_ROW_FAIL;
+}
+
+static const char* report_row_state_text(unsigned char state) {
+  switch (state) {
+    case REPORT_ROW_PASS:
+      return "PASS";
+    case REPORT_ROW_FAIL:
+      return "FAIL";
+    default:
+      return "NOT RUN";
+  }
+}
+
+static unsigned char any_report_test_ran(void) {
+  return (unsigned char)(results.motor_test_ran || results.sense_drive_ran ||
+                         results.recalibrate_ran || results.seek_ran ||
+                         results.read_id_ran);
+}
+
+static void build_report_bar(char out[9]) {
   unsigned char i;
-  char fill = ok ? '#' : 'X';
 
   for (i = 0; i < 8U; i++) {
-    out[i] = fill;
+    out[i] = '|';
   }
   out[8] = '\0';
 }
 
-static void build_report_row(char* out, const char* label, unsigned char ok) {
+static void build_report_row(char* out, const char* label, unsigned char state) {
   char bar[9];
-  build_report_bar(ok, bar);
-  sprintf(out, "%-6s [%s] %s", label, bar, pass_fail(ok));
+  build_report_bar(bar);
+  sprintf(out, "%-6s [%s] %s", label, bar, report_row_state_text(state));
 }
 
 static void build_overall_row(char* out, unsigned char total) {
@@ -711,7 +742,7 @@ static void build_overall_row(char* out, unsigned char total) {
   char meter[6];
 
   for (i = 0; i < 5U; i++) {
-    meter[i] = (i < total) ? '#' : '-';
+    meter[i] = (i < total) ? '|' : ' ';
   }
   meter[5] = '\0';
   sprintf(out, "OVERALL [%s] %u/5 PASS", meter, (unsigned int)total);
@@ -728,15 +759,25 @@ static void ui_colour_report_row(unsigned char row, const char* text) {
   lbr = strchr(text, '[');
   rbr = strchr(text, ']');
   if (lbr && rbr && rbr > lbr) {
+    unsigned char state = REPORT_ROW_NOT_RUN;
+    if (strstr(text, "PASS")) {
+      state = REPORT_ROW_PASS;
+    } else if (strstr(text, "FAIL")) {
+      state = REPORT_ROW_FAIL;
+    }
+
     bar_col = (unsigned char)(lbr - text + 1);
     while (bar_col < 32U && &text[bar_col] < rbr) {
       char ch = text[bar_col];
-      if (ch == '#') {
-        ui_attr_set_cell(row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_CYAN, 1);
-      } else if (ch == 'X') {
-        ui_attr_set_cell(row, bar_col, ZX_COLOUR_WHITE, ZX_COLOUR_RED, 1);
-      } else if (ch == '-') {
-        ui_attr_set_cell(row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+      if (ch == '|') {
+        if (state == REPORT_ROW_PASS) {
+          ui_attr_set_cell(row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+        } else if (state == REPORT_ROW_FAIL) {
+          /* Spectrum has no orange; red-on-yellow gives a strong warning tone. */
+          ui_attr_set_cell(row, bar_col, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+        } else {
+          ui_attr_set_cell(row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+        }
       }
       bar_col++;
     }
@@ -744,23 +785,39 @@ static void ui_colour_report_row(unsigned char row, const char* text) {
 
   for (col = 0; col < 29U; col++) {
     if (strncmp(&text[col], "PASS", 4U) == 0) {
-      ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, ZX_COLOUR_CYAN, 1);
+      ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_BLACK,
-                       ZX_COLOUR_CYAN, 1);
+                       ZX_COLOUR_GREEN, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 2U), ZX_COLOUR_BLACK,
-                       ZX_COLOUR_CYAN, 1);
+                       ZX_COLOUR_GREEN, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 3U), ZX_COLOUR_BLACK,
-                       ZX_COLOUR_CYAN, 1);
+                       ZX_COLOUR_GREEN, 1);
       break;
     }
     if (strncmp(&text[col], "FAIL", 4U) == 0) {
-      ui_attr_set_cell(row, col, ZX_COLOUR_WHITE, ZX_COLOUR_RED, 1);
-      ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_WHITE,
-                       ZX_COLOUR_RED, 1);
-      ui_attr_set_cell(row, (unsigned char)(col + 2U), ZX_COLOUR_WHITE,
-                       ZX_COLOUR_RED, 1);
-      ui_attr_set_cell(row, (unsigned char)(col + 3U), ZX_COLOUR_WHITE,
-                       ZX_COLOUR_RED, 1);
+      ui_attr_set_cell(row, col, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_RED,
+                       ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 2U), ZX_COLOUR_RED,
+                       ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 3U), ZX_COLOUR_RED,
+                       ZX_COLOUR_YELLOW, 1);
+      break;
+    }
+    if (strncmp(&text[col], "NOT RUN", 7U) == 0) {
+      ui_attr_set_cell(row, col, ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 2U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 3U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 4U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 5U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(row, (unsigned char)(col + 6U), ZX_COLOUR_BLUE,
+                       ZX_COLOUR_WHITE, 1);
       break;
     }
   }
@@ -787,6 +844,7 @@ static const char* report_result_text(void) {
 
 static void ui_render_report_card(void) {
   unsigned char total = pass_count();
+  unsigned char last_state;
   char line_status[32];
   char line_last[32];
   char line_motor[32];
@@ -798,12 +856,26 @@ static void ui_render_report_card(void) {
   const char* lines[9];
 
   strcpy(line_status, report_status_text());
-  build_report_row(line_last, "LAST", (unsigned char)(!last_test_failed));
-  build_report_row(line_motor, "MOTOR", results.motor_test_pass);
-  build_report_row(line_drive, "DRIVE", results.sense_drive_pass);
-  build_report_row(line_recal, "RECAL", results.recalibrate_pass);
-  build_report_row(line_seek, "SEEK", results.seek_pass);
-  build_report_row(line_readid, "READID", results.read_id_pass);
+  if (!any_report_test_ran()) {
+    last_state = REPORT_ROW_NOT_RUN;
+  } else {
+    last_state = last_test_failed ? REPORT_ROW_FAIL : REPORT_ROW_PASS;
+  }
+
+  build_report_row(line_last, "LAST", last_state);
+  build_report_row(line_motor, "MOTOR",
+                   report_row_state(results.motor_test_ran,
+                                    results.motor_test_pass));
+  build_report_row(line_drive, "DRIVE",
+                   report_row_state(results.sense_drive_ran,
+                                    results.sense_drive_pass));
+  build_report_row(line_recal, "RECAL",
+                   report_row_state(results.recalibrate_ran,
+                                    results.recalibrate_pass));
+  build_report_row(line_seek, "SEEK",
+                   report_row_state(results.seek_ran, results.seek_pass));
+  build_report_row(line_readid, "READID",
+                   report_row_state(results.read_id_ran, results.read_id_pass));
   build_overall_row(line_overall, total);
 
   lines[0] = line_status;
@@ -814,7 +886,7 @@ static void ui_render_report_card(void) {
   lines[5] = line_seek;
   lines[6] = line_readid;
   lines[7] = line_overall;
-  lines[8] = "BARS  : #=PASS X=FAIL";
+  lines[8] = "BARS  : |=STATE COLOR";
 
   ui_render_text_screen("TEST REPORT CARD", report_controls_text(), lines, 9,
                         report_result_text());
@@ -1376,6 +1448,8 @@ static void test_motor_and_drive_status(int interactive) {
   const char* lines[6];
 
   last_test_failed = 0;
+  results.motor_test_ran = 1;
+  results.sense_drive_ran = 1;
   lines[0] = line6;
   lines[1] = line1;
   lines[2] = line2;
@@ -1447,6 +1521,7 @@ static void test_read_id_probe(int interactive) {
   const char* lines[6];
 
   last_test_failed = 0;
+  results.sense_drive_ran = 1;
   lines[0] = line1;
   lines[1] = line2;
   lines[2] = line3;
@@ -1524,6 +1599,8 @@ static void test_recal_seek_track2(int interactive) {
   (void)interactive;
 
   last_test_failed = 0;
+  results.recalibrate_ran = 1;
+  results.seek_ran = 1;
   lines[0] = line1;
   lines[1] = line2;
   lines[2] = line3;
@@ -1723,6 +1800,7 @@ static void test_read_id(int interactive) {
   (void)interactive;
 
   last_test_failed = 0;
+  results.read_id_ran = 1;
   lines[0] = line1;
   lines[1] = line2;
   lines[2] = line3;
