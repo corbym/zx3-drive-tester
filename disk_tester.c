@@ -167,10 +167,6 @@ static void disable_terminal_auto_pause(void) {
   ioctl(1, IOCTL_OTERM_PAUSE, 0);
 }
 
-static const char* pass_fail(unsigned char ok) { return ok ? "PASS" : "FAIL"; }
-
-static const char* yes_no(unsigned char flag) { return flag ? "YES" : "NO"; }
-
 static unsigned char pass_count(void) {
   return (unsigned char)(results.motor_test_pass + results.sense_drive_pass +
                          results.recalibrate_pass + results.seek_pass +
@@ -179,19 +175,6 @@ static unsigned char pass_count(void) {
 
 static void reset_report_progress(void) {
   report_status_code = REPORT_STATUS_NONE;
-}
-
-static const char* report_status_text(void) {
-  switch (report_status_code) {
-    case REPORT_STATUS_READY:
-      return "STATUS: READY";
-    case REPORT_STATUS_RUNNING:
-      return "STATUS: RUNNING";
-    case REPORT_STATUS_COMPLETE:
-      return "STATUS: COMPLETE";
-    default:
-      return "STATUS: NO TESTS RUN";
-  }
 }
 
 static void set_report_status(unsigned char status_code) {
@@ -272,61 +255,14 @@ static void ui_render_main_menu(unsigned char selected_index,
   }
 }
 
-#define REPORT_ROW_NOT_RUN 0U
-#define REPORT_ROW_PASS 1U
-#define REPORT_ROW_FAIL 2U
-
-static unsigned char report_row_state(unsigned char ran, unsigned char pass) {
-  if (!ran) return REPORT_ROW_NOT_RUN;
-  return pass ? REPORT_ROW_PASS : REPORT_ROW_FAIL;
-}
-
-static const char* report_row_state_text(unsigned char state) {
-  switch (state) {
-    case REPORT_ROW_PASS:
-      return "PASS";
-    case REPORT_ROW_FAIL:
-      return "FAIL";
-    default:
-      return "NOT RUN";
-  }
-}
-
 static unsigned char any_report_test_ran(void) {
   return (unsigned char)(results.motor_test_ran || results.sense_drive_ran ||
                          results.recalibrate_ran || results.seek_ran ||
                          results.read_id_ran);
 }
 
-static void build_report_bar(char out[9]) {
-  unsigned char i;
-
-  for (i = 0; i < 8U; i++) {
-    out[i] = '|';
-  }
-  out[8] = '\0';
-}
-
-static void build_report_row(char* out, const char* label,
-                             unsigned char state) {
-  char bar[9];
-  build_report_bar(bar);
-  sprintf(out, "%-6s [%s] %s", label, bar, report_row_state_text(state));
-}
-
-static void build_overall_row(char* out, unsigned char total) {
-  unsigned char i;
-  char meter[6];
-
-  for (i = 0; i < 5U; i++) {
-    meter[i] = (i < total) ? '|' : ' ';
-  }
-  meter[5] = '\0';
-  sprintf(out, "OVERALL [%s] %u/5 PASS", meter, (unsigned int)total);
-}
-
 static void ui_colour_report_row(unsigned char row, const char* text,
-                                 unsigned char state) {
+                                 ReportCardState state) {
   const char* lbr;
   const char* rbr;
   unsigned char col;
@@ -341,9 +277,9 @@ static void ui_colour_report_row(unsigned char row, const char* text,
     while (bar_col < 32U && &text[bar_col] < rbr) {
       char ch = text[bar_col];
       if (ch == '|') {
-        if (state == REPORT_ROW_PASS) {
+        if (state == REPORT_CARD_STATE_PASS) {
           ui_attr_set_cell(row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
-        } else if (state == REPORT_ROW_FAIL) {
+        } else if (state == REPORT_CARD_STATE_FAIL) {
           /* Spectrum has no orange; red-on-yellow gives a strong warning tone.
            */
           ui_attr_set_cell(row, bar_col, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
@@ -356,7 +292,8 @@ static void ui_colour_report_row(unsigned char row, const char* text,
   }
 
   for (col = 0; col < 29U; col++) {
-    if (state == REPORT_ROW_PASS && strncmp(&text[col], "PASS", 4U) == 0) {
+    if (state == REPORT_CARD_STATE_PASS &&
+      strncmp(&text[col], "PASS", 4U) == 0) {
       ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_BLACK,
                        ZX_COLOUR_GREEN, 1);
@@ -366,7 +303,8 @@ static void ui_colour_report_row(unsigned char row, const char* text,
                        ZX_COLOUR_GREEN, 1);
       break;
     }
-    if (state == REPORT_ROW_FAIL && strncmp(&text[col], "FAIL", 4U) == 0) {
+    if (state == REPORT_CARD_STATE_FAIL &&
+      strncmp(&text[col], "FAIL", 4U) == 0) {
       ui_attr_set_cell(row, col, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_RED,
                        ZX_COLOUR_YELLOW, 1);
@@ -376,7 +314,7 @@ static void ui_colour_report_row(unsigned char row, const char* text,
                        ZX_COLOUR_YELLOW, 1);
       break;
     }
-    if (state == REPORT_ROW_NOT_RUN &&
+    if (state == REPORT_CARD_STATE_NOT_RUN &&
         strncmp(&text[col], "NOT RUN", 7U) == 0) {
       ui_attr_set_cell(row, col, ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
       ui_attr_set_cell(row, (unsigned char)(col + 1U), ZX_COLOUR_BLUE,
@@ -396,93 +334,92 @@ static void ui_colour_report_row(unsigned char row, const char* text,
   }
 }
 
-static const char* report_controls_text(void) {
-  return (report_status_code == REPORT_STATUS_RUNNING)
-             ? "KEYS  : AUTO ADVANCE"
-             : "KEYS  : ENTER/ESC/X MENU";
+static ReportCardState report_card_state_from_runpass(unsigned char ran,
+                                                       unsigned char pass) {
+  if (!ran) return REPORT_CARD_STATE_NOT_RUN;
+  return pass ? REPORT_CARD_STATE_PASS : REPORT_CARD_STATE_FAIL;
 }
 
-static const char* report_result_text(void) {
-  switch (report_status_code) {
+static ReportCardPhase report_card_phase_from_status(unsigned char status) {
+  switch (status) {
     case REPORT_STATUS_READY:
-      return "RESULT: READY";
+      return REPORT_CARD_PHASE_READY;
     case REPORT_STATUS_RUNNING:
-      return "RESULT: RUNNING";
+      return REPORT_CARD_PHASE_RUNNING;
     case REPORT_STATUS_COMPLETE:
-      return "RESULT: COMPLETE";
+      return REPORT_CARD_PHASE_COMPLETE;
     default:
-      return "RESULT: IDLE";
+      return REPORT_CARD_PHASE_IDLE;
   }
 }
 
 static void ui_render_report_card(void) {
   unsigned char total = pass_count();
-  unsigned char last_state;
-  unsigned char motor_state;
-  unsigned char drive_state;
-  unsigned char recal_state;
-  unsigned char seek_state;
-  unsigned char readid_state;
-  unsigned char overall_state;
-  char line_status[32];
-  char line_last[32];
-  char line_motor[32];
-  char line_drive[32];
-  char line_recal[32];
-  char line_seek[32];
-  char line_readid[32];
-  char line_overall[32];
-  const char* lines[9];
+  ReportCardState last_state;
+  ReportCardState motor_state;
+  ReportCardState drive_state;
+  ReportCardState recal_state;
+  ReportCardState seek_state;
+  ReportCardState readid_state;
+  ReportCardState overall_state;
+  ReportCard card;
 
-  strcpy(line_status, report_status_text());
+  report_card_init(&card);
+  report_card_set_phase(&card, report_card_phase_from_status(report_status_code));
+  report_card_set_total_pass(&card, total);
+
   if (!any_report_test_ran()) {
-    last_state = REPORT_ROW_NOT_RUN;
+    last_state = REPORT_CARD_STATE_NOT_RUN;
   } else {
-    last_state = last_test_failed ? REPORT_ROW_FAIL : REPORT_ROW_PASS;
+    last_state =
+        last_test_failed ? REPORT_CARD_STATE_FAIL : REPORT_CARD_STATE_PASS;
   }
 
   motor_state =
-      report_row_state(results.motor_test_ran, results.motor_test_pass);
-  drive_state =
-      report_row_state(results.sense_drive_ran, results.sense_drive_pass);
-  recal_state =
-      report_row_state(results.recalibrate_ran, results.recalibrate_pass);
-  seek_state = report_row_state(results.seek_ran, results.seek_pass);
-  readid_state = report_row_state(results.read_id_ran, results.read_id_pass);
-  overall_state = (total == 5U) ? REPORT_ROW_PASS
-                                : (any_report_test_ran() ? REPORT_ROW_FAIL
-                                                         : REPORT_ROW_NOT_RUN);
+      report_card_state_from_runpass(results.motor_test_ran, results.motor_test_pass);
+  drive_state = report_card_state_from_runpass(results.sense_drive_ran,
+                                               results.sense_drive_pass);
+  recal_state = report_card_state_from_runpass(results.recalibrate_ran,
+                                               results.recalibrate_pass);
+  seek_state = report_card_state_from_runpass(results.seek_ran, results.seek_pass);
+  readid_state =
+      report_card_state_from_runpass(results.read_id_ran, results.read_id_pass);
+  overall_state = (total == 5U)
+                      ? REPORT_CARD_STATE_PASS
+                      : (any_report_test_ran() ? REPORT_CARD_STATE_FAIL
+                                               : REPORT_CARD_STATE_NOT_RUN);
 
-  build_report_row(line_last, "LAST", last_state);
-  build_report_row(line_motor, "MOTOR", motor_state);
-  build_report_row(line_drive, "DRIVE", drive_state);
-  build_report_row(line_recal, "RECAL", recal_state);
-  build_report_row(line_seek, "SEEK", seek_state);
-  build_report_row(line_readid, "READID", readid_state);
-  build_overall_row(line_overall, total);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_LAST, last_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_MOTOR, motor_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_DRIVE, drive_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_RECAL, recal_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_SEEK, seek_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_READID, readid_state);
+  report_card_set_slot_state(&card, REPORT_CARD_SLOT_OVERALL, overall_state);
 
-  lines[0] = line_status;
-  lines[1] = line_last;
-  lines[2] = line_motor;
-  lines[3] = line_drive;
-  lines[4] = line_recal;
-  lines[5] = line_seek;
-  lines[6] = line_readid;
-  lines[7] = line_overall;
-  lines[8] = "BARS  : |=STATE COLOR";
-
-  ui_render_text_screen("TEST REPORT CARD", report_controls_text(), lines, 9,
-                        report_result_text());
+  report_card_render(&card);
 
   /* Rows are fixed by ui_render_text_screen: controls at row 2, lines start at
    * row 3. */
-  ui_colour_report_row(4U, line_last, last_state);
-  ui_colour_report_row(5U, line_motor, motor_state);
-  ui_colour_report_row(6U, line_drive, drive_state);
-  ui_colour_report_row(7U, line_recal, recal_state);
-  ui_colour_report_row(8U, line_seek, seek_state);
-  ui_colour_report_row(9U, line_readid, readid_state);
-  ui_colour_report_row(10U, line_overall, overall_state);
+  ui_colour_report_row(4U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_LAST),
+                       report_card_get_slot_state(&card, REPORT_CARD_SLOT_LAST));
+  ui_colour_report_row(
+      5U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_MOTOR),
+      report_card_get_slot_state(&card, REPORT_CARD_SLOT_MOTOR));
+  ui_colour_report_row(
+      6U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_DRIVE),
+      report_card_get_slot_state(&card, REPORT_CARD_SLOT_DRIVE));
+  ui_colour_report_row(
+      7U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_RECAL),
+      report_card_get_slot_state(&card, REPORT_CARD_SLOT_RECAL));
+  ui_colour_report_row(8U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_SEEK),
+                       report_card_get_slot_state(&card, REPORT_CARD_SLOT_SEEK));
+  ui_colour_report_row(
+      9U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_READID),
+      report_card_get_slot_state(&card, REPORT_CARD_SLOT_READID));
+  ui_colour_report_row(
+      10U, report_card_get_slot_line(&card, REPORT_CARD_SLOT_OVERALL),
+      report_card_get_slot_state(&card, REPORT_CARD_SLOT_OVERALL));
 }
 
 static void ui_render_track_loop_screen(unsigned char track,
@@ -490,23 +427,23 @@ static void ui_render_track_loop_screen(unsigned char track,
                                         unsigned int fail_count,
                                         const char* last1, const char* last2,
                                         const char* result) {
-  char track_line[32];
-  char pass_line[32];
-  char fail_line[32];
-  const char* lines[5];
+  TrackLoopCard track_loop_card;
+  TestCardResult card_result;
 
-  sprintf(track_line, "TRACK : %3u", (unsigned int)track);
-  sprintf(pass_line, "PASS  : %3u", pass_count);
-  sprintf(fail_line, "FAIL  : %3u", fail_count);
-  lines[0] = track_line;
-  lines[1] = pass_line;
-  lines[2] = fail_line;
-  lines[3] = last1 ? last1 : "LAST  : OK";
-  lines[4] = last2 ? last2 : "INFO  : READY";
+  track_loop_card_init(&track_loop_card);
+  set_track_loop_track(&track_loop_card, track);
+  set_track_loop_counts(&track_loop_card, pass_count, fail_count);
+  set_track_loop_last(&track_loop_card, last1 ? last1 : "LAST  : OK");
+  set_track_loop_info(&track_loop_card, last2 ? last2 : "INFO  : READY");
 
-  ui_render_text_screen("READ TRACK DATA LOOP",
-                        "KEYS  : J/K TRACK  ENTER/X EXIT", lines, 5,
-                        result ? result : "RESULT: ACTIVE");
+  if (result && strcmp(result, "RESULT: FAIL") == 0) {
+    card_result = TEST_CARD_RESULT_FAIL;
+  } else if (result && strcmp(result, "RESULT: STOPPED") == 0) {
+    card_result = TEST_CARD_RESULT_STOPPED;
+  } else {
+    card_result = TEST_CARD_RESULT_ACTIVE;
+  }
+  render_track_loop(&track_loop_card, card_result);
 }
 
 static void ui_render_rpm_loop_screen(unsigned int rpm, unsigned char rpm_valid,
@@ -514,26 +451,27 @@ static void ui_render_rpm_loop_screen(unsigned int rpm, unsigned char rpm_valid,
                                       unsigned int fail_count,
                                       const char* last1, const char* last2,
                                       const char* result) {
-  char rpm_line[32];
-  char pass_line[32];
-  char fail_line[32];
-  const char* lines[5];
+  RpmLoopCard rpm_loop_card;
+  TestCardResult card_result;
 
-  if (rpm_valid) {
-    sprintf(rpm_line, "RPM   : %3u", rpm);
+  rpm_loop_card_init(&rpm_loop_card);
+  set_rpm_loop_rpm(&rpm_loop_card, rpm, rpm_valid);
+  set_rpm_loop_counts(&rpm_loop_card, pass_count, fail_count);
+  set_rpm_loop_last(&rpm_loop_card, last1 ? last1 : "LAST  : WAITING");
+  set_rpm_loop_info(&rpm_loop_card, last2 ? last2 : "INFO  : READY");
+
+  if (result && strcmp(result, "RESULT: FAIL") == 0) {
+    card_result = TEST_CARD_RESULT_FAIL;
+  } else if (result && strcmp(result, "RESULT: PASS") == 0) {
+    card_result = TEST_CARD_RESULT_PASS;
+  } else if (result && strcmp(result, "RESULT: OUT-OF-RANGE") == 0) {
+    card_result = TEST_CARD_RESULT_OUT_OF_RANGE;
+  } else if (result && strcmp(result, "RESULT: STOPPED") == 0) {
+    card_result = TEST_CARD_RESULT_STOPPED;
   } else {
-    strcpy(rpm_line, "RPM   : ---");
+    card_result = TEST_CARD_RESULT_ACTIVE;
   }
-  sprintf(pass_line, "PASS  : %3u", pass_count);
-  sprintf(fail_line, "FAIL  : %3u", fail_count);
-  lines[0] = rpm_line;
-  lines[1] = pass_line;
-  lines[2] = fail_line;
-  lines[3] = last1 ? last1 : "LAST  : WAITING";
-  lines[4] = last2 ? last2 : "INFO  : READY";
-
-  ui_render_text_screen("DISK RPM CHECK LOOP", "KEYS  : ENTER/X EXIT", lines, 5,
-                        result ? result : "RESULT: ACTIVE");
+  render_rpm_loop(&rpm_loop_card, card_result);
 }
 
 static int read_key_blocking(void);
@@ -590,10 +528,6 @@ static unsigned char j_pressed(void) {
 
 static unsigned char k_pressed(void) {
   return (unsigned char)((inportb(0xBFFE) & 0x04) == 0);
-}
-
-static unsigned char enter_pressed(void) {
-  return (unsigned char)((inportb(0xBFFE) & 0x01) == 0);
 }
 
 static unsigned short frame_ticks(void) {
@@ -999,67 +933,35 @@ static void test_motor_and_drive_status(int interactive) {
   unsigned char st3 = 0;
   unsigned char have_st3;
   unsigned char show_live_card = show_selected_test_cards();
-  char line1[32];
-  char line2[32];
-  char line3[32];
-  char line4[32];
-  char line5[32];
-  char line6[32];
-  const char* lines[6];
+  MotorDriveCard motor_drive_card;
 
   last_test_failed = 0;
   results.motor_test_ran = 1;
   results.sense_drive_ran = 1;
-  lines[0] = line6;
-  lines[1] = line1;
-  lines[2] = line2;
-  lines[3] = line3;
-  lines[4] = line4;
-  lines[5] = line5;
+  motor_drive_card_init(&motor_drive_card, single_shot_test_controls(interactive));
 
   if (show_live_card) {
-    strcpy(line6, "MOTOR : OFF");
-    strcpy(line1, "ST3   : ---");
-    strcpy(line2, "READY : ---");
-    strcpy(line3, "WPROT : ---");
-    strcpy(line4, "TRACK0: ---");
-    strcpy(line5, "FAULT : ---");
-    ui_render_text_screen("MOTOR AND DRIVE STATUS",
-                          single_shot_test_controls(interactive), lines, 6,
-                          "RESULT: READY");
+    set_card_motor_off(&motor_drive_card);
+    set_motor_drive_unknown(&motor_drive_card);
+    render_motor_drive(&motor_drive_card, TEST_CARD_RESULT_READY);
     delay_ms(TEST_CARD_STATE_DELAY_MS);
-    strcpy(line6, "MOTOR : ON");
-    ui_render_text_screen("MOTOR AND DRIVE STATUS",
-                          single_shot_test_controls(interactive), lines, 6,
-                          "RESULT: RUNNING");
+    set_card_motor_on(&motor_drive_card);
+    render_motor_drive(&motor_drive_card, TEST_CARD_RESULT_RUNNING);
   }
 
   plus3_motor_on();
 
   have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
-  if (!have_st3) {
-    strcpy(line1, "ST3   : TIMEOUT");
-    strcpy(line2, "READY : NO");
-    strcpy(line3, "WPROT : NO");
-    strcpy(line4, "TRACK0: NO");
-    strcpy(line5, "FAULT : NO");
-    results.sense_drive_pass = 0;
-  } else {
-    sprintf(line1, "ST3   : 0x%02X", st3);
-    sprintf(line2, "READY : %s", yes_no(st3 & 0x20));
-    sprintf(line3, "WPROT : %s", yes_no(st3 & 0x40));
-    sprintf(line4, "TRACK0: %s", yes_no(st3 & 0x10));
-    sprintf(line5, "FAULT : %s", yes_no(st3 & 0x80));
-    results.sense_drive_pass = 1;
-  }
+  set_motor_drive_status(&motor_drive_card, have_st3, st3);
+  results.sense_drive_pass = have_st3 ? 1U : 0U;
 
   plus3_motor_off();
   results.motor_test_pass = have_st3;
   last_test_failed = (unsigned char)(results.sense_drive_pass == 0);
-  strcpy(line6, "MOTOR : OFF");
-  ui_render_text_screen(
-      "MOTOR AND DRIVE STATUS", single_shot_test_controls(interactive), lines,
-      6, results.sense_drive_pass ? "RESULT: PASS" : "RESULT: FAIL");
+  set_card_motor_off(&motor_drive_card);
+  render_motor_drive(&motor_drive_card, results.sense_drive_pass
+                                        ? TEST_CARD_RESULT_PASS
+                                        : TEST_CARD_RESULT_FAIL);
 }
 
 static void test_read_id_probe(int interactive) {
@@ -1069,60 +971,34 @@ static void test_read_id_probe(int interactive) {
   unsigned char st1 = 0, st2 = 0, c = 0, h = 0, r = 0, n = 0;
   unsigned char have_st3 = 0;
   unsigned char show_live_card = show_selected_test_cards();
-  char line1[32];
-  char line2[32];
-  char line3[32];
-  char line4[32];
-  char line5[32];
-  char line6[48];
-  const char* lines[6];
+  ReadIdProbeCard read_id_probe_card;
 
   last_test_failed = 0;
   results.read_id_ran = 1;
-  lines[0] = line1;
-  lines[1] = line2;
-  lines[2] = line3;
-  lines[3] = line4;
-  lines[4] = line5;
-  lines[5] = line6;
+  read_id_probe_card_init(&read_id_probe_card,
+                          single_shot_test_controls(interactive));
 
   if (show_live_card) {
-    strcpy(line1, "ST3   : ---");
-    strcpy(line2, "READY : ---");
-    strcpy(line3, "WPROT : ---");
-    strcpy(line4, "TRACK0: ---");
-    strcpy(line5, "FAULT : ---");
-    strcpy(line6, "ID    : WAITING");
-    ui_render_text_screen("DRIVE READ ID PROBE",
-                          single_shot_test_controls(interactive), lines, 6,
-                          "RESULT: READY");
+    set_read_id_probe_unknown(&read_id_probe_card);
+    set_id_waiting(&read_id_probe_card);
+    render_read_id_probe(&read_id_probe_card, TEST_CARD_RESULT_READY);
     delay_ms(TEST_CARD_STATE_DELAY_MS);
-    strcpy(line6, "ID    : PROBING");
-    ui_render_text_screen("DRIVE READ ID PROBE",
-                          single_shot_test_controls(interactive), lines, 6,
-                          "RESULT: RUNNING");
+    set_id_probing(&read_id_probe_card);
+    render_read_id_probe(&read_id_probe_card, TEST_CARD_RESULT_RUNNING);
   }
 
   plus3_motor_on();
 
   /* 1) Raw drive lines (ST3), informational */
   have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &st3);
-  if (!have_st3) {
-    strcpy(line1, "ST3   : TIMEOUT");
-  } else {
-    sprintf(line1, "ST3   : 0x%02X", st3);
-  }
-  sprintf(line2, "READY : %s", yes_no(have_st3 && (st3 & 0x20)));
-  sprintf(line3, "WPROT : %s", yes_no(have_st3 && (st3 & 0x40)));
-  sprintf(line4, "TRACK0: %s", yes_no(have_st3 && (st3 & 0x10)));
-  sprintf(line5, "FAULT : %s", yes_no(have_st3 && (st3 & 0x80)));
+  set_read_id_probe_status(&read_id_probe_card, have_st3, st3);
 
   /* 2) A command that tends to surface "not ready" in ST0 (and steps hardware)
    */
   if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    strcpy(line6, "ID    : PRECHECK OK");
+    set_precheck_ok(&read_id_probe_card);
   } else {
-    strcpy(line6, "ID    : PRECHECK FAIL");
+    set_precheck_fail(&read_id_probe_card);
   }
 
   /* 3) Media probe: Read ID, best indicator for both hardware and emulation */
@@ -1132,13 +1008,13 @@ static void test_read_id_probe(int interactive) {
   last_test_failed = (unsigned char)(rid_ok == 0);
   plus3_motor_off();
   if (rid_ok) {
-    sprintf(line6, "ID    : C%u H%u R%u N%u", c, h, r, n);
+    set_id_chrn(&read_id_probe_card, c, h, r, n);
   } else {
-    sprintf(line6, "ID    : %s", read_id_failure_reason(st1, st2));
+    set_id_failure(&read_id_probe_card, read_id_failure_reason(st1, st2));
   }
-  ui_render_text_screen("DRIVE READ ID PROBE",
-                        single_shot_test_controls(interactive), lines, 6,
-                        results.read_id_pass ? "RESULT: PASS" : "RESULT: FAIL");
+  render_read_id_probe(&read_id_probe_card, results.read_id_pass
+                                          ? TEST_CARD_RESULT_PASS
+                                          : TEST_CARD_RESULT_FAIL);
 }
 
 static void test_recal_seek_track2(int interactive) {
@@ -1148,83 +1024,67 @@ static void test_recal_seek_track2(int interactive) {
   unsigned char recal_ok = 0;
   unsigned char seek_ok = 0;
   unsigned char show_live_card = show_selected_test_cards();
-  char line1[32];
-  char line2[32];
-  char line3[32];
-  char line4[32];
-  const char* lines[4];
+  RecalSeekCard recal_seek_card;
   (void)interactive;
 
   last_test_failed = 0;
   results.recalibrate_ran = 1;
   results.seek_ran = 1;
-  lines[0] = line1;
-  lines[1] = line2;
-  lines[2] = line3;
-  lines[3] = line4;
+  recal_seek_card_init(&recal_seek_card, single_shot_test_controls(interactive));
 
   if (show_live_card) {
-    strcpy(line1, "READY : ---");
-    strcpy(line2, "RECAL : ---");
-    strcpy(line3, "SEEK  : ---");
-    strcpy(line4, "DETAIL: ---");
-    ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                          single_shot_test_controls(interactive), lines, 4,
-                          "RESULT: READY");
+    set_recal_seek_unknown(&recal_seek_card);
+    render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_READY);
     delay_ms(TEST_CARD_STATE_DELAY_MS);
-    strcpy(line2, "RECAL : RUNNING");
-    strcpy(line3, "SEEK  : PENDING");
-    ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                          single_shot_test_controls(interactive), lines, 4,
-                          "RESULT: RUNNING");
+    set_recal_status_running(&recal_seek_card);
+    set_seek_status_pending(&recal_seek_card);
+    render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_RUNNING);
   }
 
   plus3_motor_on();
 
   if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-    sprintf(line1, "READY : FAIL ST3=%02X", st3);
-    strcpy(line2, "RECAL : SKIPPED");
-    strcpy(line3, "SEEK  : SKIPPED");
-    lines[3] = "DETAIL: CHECK MEDIA";
+    set_recal_seek_ready_fail_st3(&recal_seek_card, st3);
+    set_recal_status_skipped(&recal_seek_card);
+    set_seek_status_skipped(&recal_seek_card);
+    set_detail_check_media(&recal_seek_card);
     results.recalibrate_pass = 0;
     results.seek_pass = 0;
     plus3_motor_off();
     last_test_failed = 1;
-    ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                          single_shot_test_controls(interactive), lines, 4,
-                          "RESULT: FAIL");
+    render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
     return;
   }
-  strcpy(line1, "READY : YES");
+  set_ready_yes(&recal_seek_card);
   if (!cmd_recalibrate(FDC_DRIVE) ||
       !wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    strcpy(line2, "RECAL : FAIL");
-    strcpy(line3, "SEEK  : SKIPPED");
-    sprintf(line4, "DETAIL: ST0=%02X PCN=%u", st0, pcn);
+    set_recal_status_fail(&recal_seek_card);
+    set_seek_status_skipped(&recal_seek_card);
+    set_detail_st0_pcn(&recal_seek_card, st0, pcn);
     results.recalibrate_pass = 0;
     results.seek_pass = 0;
     plus3_motor_off();
     last_test_failed = 1;
-    ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                          single_shot_test_controls(interactive), lines, 4,
-                          "RESULT: FAIL");
+    render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
     return;
   }
   recal_ok = (unsigned char)(pcn == 0);
+  if (recal_ok) {
+    set_recal_status_pass(&recal_seek_card);
+  } else {
+    set_recal_status_fail(&recal_seek_card);
+  }
 
   if (!cmd_seek(FDC_DRIVE, 0, track_target) ||
       !wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-    strcpy(line1, "READY : YES");
-    sprintf(line2, "RECAL : %s", pass_fail(recal_ok));
-    strcpy(line3, "SEEK  : FAIL");
-    sprintf(line4, "DETAIL: ST0=%02X PCN=%u", st0, pcn);
+    set_ready_yes(&recal_seek_card);
+    set_seek_status_fail(&recal_seek_card);
+    set_detail_st0_pcn(&recal_seek_card, st0, pcn);
     results.recalibrate_pass = recal_ok;
     results.seek_pass = 0;
     plus3_motor_off();
     last_test_failed = 1;
-    ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                          single_shot_test_controls(interactive), lines, 4,
-                          "RESULT: FAIL");
+    render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
     return;
   }
   seek_ok = (unsigned char)(pcn == track_target);
@@ -1234,54 +1094,49 @@ static void test_recal_seek_track2(int interactive) {
   plus3_motor_off();
   last_test_failed =
       (unsigned char)(!(results.recalibrate_pass && results.seek_pass));
-  sprintf(line2, "RECAL : %s", pass_fail(results.recalibrate_pass));
-  sprintf(line3, "SEEK  : %s", pass_fail(results.seek_pass));
-  sprintf(line4, "DETAIL: TRACK %u", (unsigned int)pcn);
-  ui_render_text_screen("RECALIBRATE AND SEEK TRACK 2",
-                        single_shot_test_controls(interactive), lines, 4,
-                        (results.recalibrate_pass && results.seek_pass)
-                            ? "RESULT: PASS"
-                            : "RESULT: FAIL");
+  if (results.recalibrate_pass) {
+    set_recal_status_pass(&recal_seek_card);
+  } else {
+    set_recal_status_fail(&recal_seek_card);
+  }
+  if (results.seek_pass) {
+    set_seek_status_pass(&recal_seek_card);
+  } else {
+    set_seek_status_fail(&recal_seek_card);
+  }
+  set_detail_track(&recal_seek_card, pcn);
+  render_recal_seek(&recal_seek_card, (results.recalibrate_pass && results.seek_pass)
+                                        ? TEST_CARD_RESULT_PASS
+                                        : TEST_CARD_RESULT_FAIL);
 }
 
 static void test_seek_interactive(void) {
   unsigned char st0 = 0, pcn = 0;
   unsigned char st3 = 0;
   unsigned char target = 0;
-  char line1[32];
-  char line2[32];
-  char line3[32];
-  const char* lines[3];
+  InteractiveSeekCard interactive_seek_card;
 
   last_test_failed = 0;
+  interactive_seek_card_init(&interactive_seek_card,
+                             "KEYS  : K UP  J DOWN  Q EXIT");
 
   plus3_motor_on();
 
   if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-    sprintf(line1, "READY : FAIL ST3=%02X", st3);
-    strcpy(line2, "TRACK : 0");
-    strcpy(line3, "LAST  : NO SEEK");
+    set_interactive_seek_ready_fail_st3(&interactive_seek_card, st3);
+    set_last_no_seek(&interactive_seek_card);
+    set_pcn(&interactive_seek_card, 0U);
     plus3_motor_off();
     last_test_failed = 1;
-    lines[0] = line1;
-    lines[1] = line2;
-    lines[2] = line3;
-    ui_render_text_screen("INTERACTIVE STEP SEEK",
-                          "KEYS  : K UP  J DOWN  Q EXIT", lines, 3,
-                          "RESULT: FAIL");
+    render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
     return;
   }
   
   for (;;) {
-    sprintf(line1, "TRACK : %u", (unsigned int)target);
-    sprintf(line2, "LAST  : ST0=%02X", st0);
-    sprintf(line3, "PCN   : %u", (unsigned int)pcn);
-    lines[0] = line1;
-    lines[1] = line2;
-    lines[2] = line3;
-    ui_render_text_screen("INTERACTIVE STEP SEEK",
-                          "KEYS  : K UP  J DOWN  Q EXIT", lines, 3,
-                          "RESULT: ACTIVE");
+    set_interactive_seek_track(&interactive_seek_card, target);
+    set_last_st0(&interactive_seek_card, st0);
+    set_pcn(&interactive_seek_card, pcn);
+    render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_ACTIVE);
     {
       int ch = read_key_blocking();
       ch = toupper((unsigned char)ch);
@@ -1295,15 +1150,11 @@ static void test_seek_interactive(void) {
           break;
         case 'Q':
           plus3_motor_off();
-          sprintf(line1, "TRACK : %u", (unsigned int)target);
-          sprintf(line2, "LAST  : ST0=%02X", st0);
-          sprintf(line3, "PCN   : %u", (unsigned int)pcn);
-          lines[0] = line1;
-          lines[1] = line2;
-          lines[2] = line3;
-          ui_render_text_screen("INTERACTIVE STEP SEEK",
-                                "KEYS  : K UP  J DOWN  Q EXIT", lines, 3,
-                                "RESULT: STOPPED");
+          set_interactive_seek_track(&interactive_seek_card, target);
+          set_last_st0(&interactive_seek_card, st0);
+          set_pcn(&interactive_seek_card, pcn);
+          render_interactive_seek(&interactive_seek_card,
+                                  TEST_CARD_RESULT_STOPPED);
           return;
         default:
           break;
@@ -1311,32 +1162,22 @@ static void test_seek_interactive(void) {
     }
 
     if (!cmd_seek(FDC_DRIVE, 0, target)) {
-      sprintf(line1, "TRACK : %u", (unsigned int)target);
-      strcpy(line2, "LAST  : SEEK CMD FAIL");
-      sprintf(line3, "PCN   : %u", (unsigned int)pcn);
+      set_interactive_seek_track(&interactive_seek_card, target);
+      set_last_seek_cmd_fail(&interactive_seek_card);
+      set_pcn(&interactive_seek_card, pcn);
       plus3_motor_off();
       last_test_failed = 1;
-      lines[0] = line1;
-      lines[1] = line2;
-      lines[2] = line3;
-      ui_render_text_screen("INTERACTIVE STEP SEEK",
-                            "KEYS  : K UP  J DOWN  Q EXIT", lines, 3,
-                            "RESULT: FAIL");
+      render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
       return;
     }
 
     if (!wait_seek_complete(FDC_DRIVE, &st0, &pcn)) {
-      sprintf(line1, "TRACK : %u", (unsigned int)target);
-      strcpy(line2, "LAST  : WAIT TIMEOUT");
-      sprintf(line3, "PCN   : %u", (unsigned int)pcn);
+      set_interactive_seek_track(&interactive_seek_card, target);
+      set_last_wait_timeout(&interactive_seek_card);
+      set_pcn(&interactive_seek_card, pcn);
       plus3_motor_off();
       last_test_failed = 1;
-      lines[0] = line1;
-      lines[1] = line2;
-      lines[2] = line3;
-      ui_render_text_screen("INTERACTIVE STEP SEEK",
-                            "KEYS  : K UP  J DOWN  Q EXIT", lines, 3,
-                            "RESULT: FAIL");
+      render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
       return;
     }
   }
@@ -1347,45 +1188,29 @@ static void test_read_id(int interactive) {
   unsigned char st3 = 0;
   unsigned char ok;
   unsigned char show_live_card = show_selected_test_cards();
-  char line1[32];
-  char line2[32];
-  char line3[32];
-  char line4[48];
-  const char* lines[4];
+  ReadIdCard read_id_card;
   (void)interactive;
 
   last_test_failed = 0;
   results.read_id_ran = 1;
-  lines[0] = line1;
-  lines[1] = line2;
-  lines[2] = line3;
-  lines[3] = line4;
+  read_id_card_init(&read_id_card, single_shot_test_controls(0));
 
   if (show_live_card) {
-    strcpy(line1, "MEDIA : READABLE DISK REQUIRED");
-    strcpy(line2, "STS   : --/--/--");
-    strcpy(line3, "CHRN  : INVALID");
-    strcpy(line4, "DETAIL: WAITING");
-    ui_render_text_screen("READ ID ON TRACK 0", single_shot_test_controls(0),
-                          lines, 4, "RESULT: READY");
+    set_waiting(&read_id_card);
+    render_read_id(&read_id_card, TEST_CARD_RESULT_READY);
     delay_ms(TEST_CARD_STATE_DELAY_MS);
-    strcpy(line4, "DETAIL: READING ID");
-    ui_render_text_screen("READ ID ON TRACK 0", single_shot_test_controls(0),
-                          lines, 4, "RESULT: RUNNING");
+    set_reading(&read_id_card);
+    render_read_id(&read_id_card, TEST_CARD_RESULT_RUNNING);
   }
 
   plus3_motor_on();
 
   if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-    strcpy(line1, "MEDIA : READABLE DISK REQUIRED");
-    sprintf(line2, "READY : ST3=%02X", st3);
-    strcpy(line3, "CHRN  : INVALID");
-    strcpy(line4, "DETAIL: DRIVE NOT READY");
+    set_drive_not_ready(&read_id_card, st3);
     results.read_id_pass = 0;
     plus3_motor_off();
     last_test_failed = 1;
-    ui_render_text_screen("READ ID ON TRACK 0", single_shot_test_controls(0),
-                          lines, 4, "RESULT: FAIL");
+    render_read_id(&read_id_card, TEST_CARD_RESULT_FAIL);
     return;
   }
 
@@ -1398,21 +1223,20 @@ static void test_read_id(int interactive) {
 
   ok = cmd_read_id(FDC_DRIVE, 0, &st0, &st1, &st2, &c, &h, &r, &n);
 
-  strcpy(line1, "MEDIA : READABLE DISK REQUIRED");
-  sprintf(line2, "STS   : %02X/%02X/%02X", st0, st1, st2);
+  set_status(&read_id_card, st0, st1, st2);
   if (ok) {
-    sprintf(line3, "CHRN  : %u/%u/%u/%u", c, h, r, n);
-    strcpy(line4, "DETAIL: ID READ OK");
+    set_chrn_valid(&read_id_card, c, h, r, n);
+    set_detail_id_ok(&read_id_card);
   } else {
-    strcpy(line3, "CHRN  : INVALID");
-    sprintf(line4, "DETAIL: %s", read_id_failure_reason(st1, st2));
+    set_chrn_invalid(&read_id_card);
+    set_detail_failure(&read_id_card, read_id_failure_reason(st1, st2));
   }
 
   results.read_id_pass = ok;
   last_test_failed = (unsigned char)(ok == 0);
   plus3_motor_off();
-  ui_render_text_screen("READ ID ON TRACK 0", single_shot_test_controls(0),
-                        lines, 4, ok ? "RESULT: PASS" : "RESULT: FAIL");
+  render_read_id(&read_id_card,
+                 ok ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
 }
 
 static void render_track_loop_fail(unsigned char track, unsigned int pass_count,

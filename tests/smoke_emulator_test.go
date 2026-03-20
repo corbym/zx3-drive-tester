@@ -234,6 +234,9 @@ func TestRunAllCompletes(t *testing.T) {
 	if err := c.Smartload(dskPath); err != nil {
 		t.Fatalf("failed to smartload DSK: %v", err)
 	}
+	if err := c.HardReset(); err != nil {
+		t.Fatalf("failed hard-reset after DSK smartload: %v", err)
+	}
 	if _, err := c.WaitForOCR(20*time.Second, "ZX +3 DISK TESTER", "ENTER: SELECT"); err != nil {
 		t.Fatalf("timed out waiting for menu after DSK load: %v", err)
 	}
