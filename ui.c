@@ -30,6 +30,7 @@
  */
 static unsigned char font_ram[1024];
 #if COMPACT_UI && !HEADLESS_ROM_FONT
+/* Only allocate font_rom if we actually switch fonts. */
 static unsigned char font_rom[1024];
 static unsigned char compact_font_active = 1;
 #endif
@@ -311,12 +312,13 @@ static void ui_screen_write_row(unsigned char row, const char* text,
 static unsigned char ui_text_screen_active;
 static const char* ui_text_screen_title;
 static const char* ui_text_screen_controls;
-static char ui_text_row_cache[24][33];
-static unsigned char ui_text_row_style[24];
+static char ui_text_row_cache[33];  /* Reduced from [24][33]: single-row cache */
+static unsigned char ui_cached_row;  /* Track which row is in cache; 255 = none */
+static unsigned char ui_text_row_style;  /* Style of cached row */
 
 void ui_reset_text_screen_cache(void) {
   memset(ui_text_row_cache, 0, sizeof(ui_text_row_cache));
-  memset(ui_text_row_style, 0xFF, sizeof(ui_text_row_style));
+  ui_cached_row = 255U;  /* Invalidate cache */
   ui_text_screen_active = 0;
   ui_text_screen_title = 0;
   ui_text_screen_controls = 0;
@@ -394,8 +396,10 @@ static void ui_render_cached_text_row(unsigned char row, const char* text,
   const char* safe_text = text ? text : "";
 
   if (row >= 24U) return;
-  if (ui_text_row_style[row] == row_style &&
-      strcmp(ui_text_row_cache[row], safe_text) == 0) {
+
+  /* Cache hit: same row, same style, same text */
+  if (ui_cached_row == row && ui_text_row_style == row_style &&
+      strcmp(ui_text_row_cache, safe_text) == 0) {
     return;
   }
 
@@ -406,9 +410,10 @@ static void ui_render_cached_text_row(unsigned char row, const char* text,
     ui_style_screen_text_row(row, safe_text);
   }
 
-  strncpy(ui_text_row_cache[row], safe_text, 32U);
-  ui_text_row_cache[row][32] = '\0';
-  ui_text_row_style[row] = row_style;
+  strncpy(ui_text_row_cache, safe_text, 32U);
+  ui_text_row_cache[32] = '\0';
+  ui_cached_row = row;
+  ui_text_row_style = row_style;
 }
 
 static void ui_begin_text_screen(const char* title, const char* controls) {

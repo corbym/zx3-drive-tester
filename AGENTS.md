@@ -128,6 +128,14 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 - **ZRCP direct**: port 9999 TCP, send `send-keys-ascii 25 65` for key 'A' (25 ms hold, ASCII code)
 - **Disk image inspection**: `.dsk` files are raw CP/M disk images; use `image` tools to extract sectors if needed
 
+### Known Failure Mode: Menu Never Appears / "Drive not ready"
+
+- Symptom in smoke tests: OCR never reaches `"ZX +3 DISK TESTER"`; emulator may show loader text and/or `"Drive not ready"`.
+- This can be a **program memory/layout regression** (static RAM pressure/overwrite), not a true floppy readiness issue.
+- Treat this as a product-code bug first (typically `ui.c`, `ui.h`, or other static-buffer growth), not a test-harness problem.
+- **Do not "fix" this by weakening smoke assertions, adding retries, or changing fallback logic in `tests/smoke_emulator_test.go`.**
+- First checks: compare `out/disk_tester_CODE.bin` size against known-good, inspect `out/disk_tester.map` high-memory symbols (`__sp_or_ret`, BSS/data tails), then audit recently added static arrays/caches.
+
 ## Common Tasks
 
 **Add a new test:**
