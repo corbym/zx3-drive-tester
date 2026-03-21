@@ -312,13 +312,15 @@ static void ui_screen_write_row(unsigned char row, const char* text,
 static unsigned char ui_text_screen_active;
 static const char* ui_text_screen_title;
 static const char* ui_text_screen_controls;
-static char ui_text_row_cache[33];  /* Reduced from [24][33]: single-row cache */
-static unsigned char ui_cached_row;  /* Track which row is in cache; 255 = none */
-static unsigned char ui_text_row_style;  /* Style of cached row */
+/*
+ * Per-row dirty cache: one byte per row combining a text checksum with the
+ * row style.  Costs only 24 bytes of BSS.  A cache hit skips the expensive
+ * pixel+attr write for that row, eliminating most of the visible flicker.
+ */
+static unsigned char ui_row_tag[24];
 
 void ui_reset_text_screen_cache(void) {
-  memset(ui_text_row_cache, 0, sizeof(ui_text_row_cache));
-  ui_cached_row = 255U;  /* Invalidate cache */
+  memset(ui_row_tag, 0xFF, sizeof(ui_row_tag));
   ui_text_screen_active = 0;
   ui_text_screen_title = 0;
   ui_text_screen_controls = 0;
@@ -391,16 +393,27 @@ static void ui_style_screen_text_row(unsigned char row, const char* text) {
       ui_line_is_alert(text) ? ZX_COLOUR_YELLOW : ZX_COLOUR_CYAN, 1);
 }
 
+static unsigned char ui_row_tag_compute(const char* text, unsigned char style) {
+  /* DJB2-style checksum folded to 6 bits, combined with 2-bit style. */
+  const unsigned char* p = (const unsigned char*)(text ? text : "");
+  unsigned char h = 0x55U;
+
+  while (*p) {
+    h = (unsigned char)((h << 1) ^ *p++);
+  }
+  return (unsigned char)((h & 0xFCU) | (style & 0x03U));
+}
+
 static void ui_render_cached_text_row(unsigned char row, const char* text,
                                       unsigned char row_style) {
   const char* safe_text = text ? text : "";
+  unsigned char tag;
 
   if (row >= 24U) return;
 
-  /* Cache hit: same row, same style, same text */
-  if (ui_cached_row == row && ui_text_row_style == row_style &&
-      strcmp(ui_text_row_cache, safe_text) == 0) {
-    return;
+  tag = ui_row_tag_compute(safe_text, row_style);
+  if (ui_row_tag[row] == tag) {
+    return;  /* Row unchanged — skip redraw. */
   }
 
   ui_screen_write_row(row, safe_text, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
@@ -410,10 +423,7 @@ static void ui_render_cached_text_row(unsigned char row, const char* text,
     ui_style_screen_text_row(row, safe_text);
   }
 
-  strncpy(ui_text_row_cache, safe_text, 32U);
-  ui_text_row_cache[32] = '\0';
-  ui_cached_row = row;
-  ui_text_row_style = row_style;
+  ui_row_tag[row] = tag;
 }
 
 static void ui_begin_text_screen(const char* title, const char* controls) {
@@ -427,14 +437,13 @@ static void ui_begin_text_screen(const char* title, const char* controls) {
   select_compact_font();
 #endif
 
-  /* Pointer-equality cache is safe because callers pass stable string literals. */
-  if (ui_text_screen_active && ui_text_screen_title == title &&
-      ui_text_screen_controls == controls) {
+  /* Keep the frame stable when only controls/result text changes. */
+  if (ui_text_screen_active && ui_text_screen_title == title) {
+    ui_text_screen_controls = controls;
     return;
   }
 
-  memset(ui_text_row_cache, 0, sizeof(ui_text_row_cache));
-  memset(ui_text_row_style, 0xFF, sizeof(ui_text_row_style));
+  memset(ui_row_tag, 0xFF, sizeof(ui_row_tag));
 
   ui_term_clear();
   ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
@@ -463,9 +472,6 @@ static void ui_begin_text_screen(const char* title, const char* controls) {
 void ui_render_text_screen(const char* title, const char* controls,
                            const char* const* lines, unsigned char line_count,
                            const char* result) {
-  unsigned char i;
-  unsigned char row;
-
   ui_begin_text_screen(title, controls);
 
   if (controls) {
@@ -474,8 +480,8 @@ void ui_render_text_screen(const char* title, const char* controls,
     ui_render_cached_text_row(2, "", UI_TEXT_ROW_STYLE_BLANK);
   }
 
-  row = 3;
-  for (i = 0; i < line_count && row < 23U; i++, row++) {
+  unsigned char row = 3;
+  for (unsigned char i = 0; i < line_count && row < 23U; i++, row++) {
     if (lines[i]) {
       ui_render_cached_text_row(row, lines[i], UI_TEXT_ROW_STYLE_TEXT);
     } else {
@@ -520,6 +526,32 @@ static void test_card_set_controls(TestCard* card, const char* controls) {
 static void test_card_set_line(TestCard* card, unsigned char row, const char* text) {
   if (row >= card->line_count) return;
   strncpy(card->text[row], text ? text : "", (size_t)(TEST_CARD_LINE_LEN - 1U));
+  card->text[row][TEST_CARD_LINE_LEN - 1U] = '\0';
+}
+
+static void test_card_set_labeled_value(TestCard* card, unsigned char row,
+                                        const char* label, const char* value,
+                                        const char* fallback_value) {
+  const char* safe_label = label ? label : "";
+  const char* safe_value = value ? value : (fallback_value ? fallback_value : "");
+  unsigned char label_len = 0U;
+
+  if (row >= card->line_count) return;
+
+  while (safe_label[label_len] && label_len < (TEST_CARD_LINE_LEN - 1U)) {
+    label_len++;
+  }
+
+  if (label_len > 0U) {
+    if (card->text[row][0] == '\0') {
+      memcpy(card->text[row], safe_label, label_len);
+      card->text[row][label_len] = '\0';
+    }
+    strncpy(&card->text[row][label_len], safe_value,
+            (size_t)(TEST_CARD_LINE_LEN - 1U - (unsigned int)label_len));
+  } else {
+    strncpy(card->text[row], safe_value, (size_t)(TEST_CARD_LINE_LEN - 1U));
+  }
   card->text[row][TEST_CARD_LINE_LEN - 1U] = '\0';
 }
 
@@ -682,18 +714,61 @@ void report_card_set_slot_state(ReportCard* card, ReportCardSlot slot,
   card->slot_state[(unsigned char)slot] = (unsigned char)state;
 }
 
-ReportCardState report_card_get_slot_state(const ReportCard* card,
-                                           ReportCardSlot slot) {
-  if ((unsigned char)slot > (unsigned char)REPORT_CARD_SLOT_OVERALL) {
-    return REPORT_CARD_STATE_NOT_RUN;
-  }
-  return (ReportCardState)card->slot_state[(unsigned char)slot];
-}
+/* Colouration for a single report-card row.  Screen row 3 = lines[0], so
+ * slot i occupies screen row 4+i.  Called exclusively from report_card_render;
+ * no knowledge of colouration escapes to the caller. */
+static void report_card_colour_row(unsigned char screen_row, const char* text,
+                                   ReportCardState state) {
+  unsigned char col;
+  const char* lbr;
+  const char* rbr;
 
-const char* report_card_get_slot_line(const ReportCard* card,
-                                      ReportCardSlot slot) {
-  if ((unsigned char)slot > (unsigned char)REPORT_CARD_SLOT_OVERALL) return "";
-  return test_card_line(&card->base, (unsigned char)(1U + (unsigned char)slot));
+  if (!text || screen_row >= 24U) return;
+
+  lbr = strchr(text, '[');
+  rbr = strchr(text, ']');
+  if (lbr && rbr && rbr > lbr) {
+    unsigned char bar_col = (unsigned char)(lbr - text + 1);
+    while (bar_col < 32U && &text[bar_col] < rbr) {
+      if (text[bar_col] == '|') {
+        if (state == REPORT_CARD_STATE_PASS) {
+          ui_attr_set_cell(screen_row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+        } else if (state == REPORT_CARD_STATE_FAIL) {
+          ui_attr_set_cell(screen_row, bar_col, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+        } else {
+          ui_attr_set_cell(screen_row, bar_col, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+        }
+      }
+      bar_col++;
+    }
+  }
+
+  for (col = 0; col < 29U; col++) {
+    if (state == REPORT_CARD_STATE_PASS && strncmp(&text[col], "PASS", 4U) == 0) {
+      ui_attr_set_cell(screen_row, col,                        ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 1U),  ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 2U),  ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 3U),  ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
+      break;
+    }
+    if (state == REPORT_CARD_STATE_FAIL && strncmp(&text[col], "FAIL", 4U) == 0) {
+      ui_attr_set_cell(screen_row, col,                        ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 1U),  ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 2U),  ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 3U),  ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
+      break;
+    }
+    if (state == REPORT_CARD_STATE_NOT_RUN && strncmp(&text[col], "NOT RUN", 7U) == 0) {
+      ui_attr_set_cell(screen_row, col,                        ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 1U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 2U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 3U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 4U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 5U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      ui_attr_set_cell(screen_row, (unsigned char)(col + 6U),  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+      break;
+    }
+  }
 }
 
 void report_card_render(ReportCard* card) {
@@ -716,30 +791,130 @@ void report_card_render(ReportCard* card) {
 
   test_card_render(&card->base,
                    report_card_result_text((ReportCardPhase)card->phase));
+
+  /* Apply state-based colouration for every slot row.
+   * ui_render_text_screen places lines[0] at screen row 3, so slot i
+   * (which occupies base line 1+i) lands at screen row 4+i. */
+  for (i = 0; i <= (unsigned char)REPORT_CARD_SLOT_OVERALL; i++) {
+    report_card_colour_row(
+        (unsigned char)(4U + i),
+        test_card_line(&card->base, (unsigned char)(1U + i)),
+        (ReportCardState)card->slot_state[i]);
+  }
 }
+
+#define TRACK_LOOP_LABEL_TRACK "TRACK : "
+#define TRACK_LOOP_LABEL_PASS "PASS  : "
+#define TRACK_LOOP_LABEL_FAIL "FAIL  : "
+#define TRACK_LOOP_LABEL_LAST "LAST  : "
+#define TRACK_LOOP_LABEL_INFO "INFO  : "
+#define RPM_LOOP_LABEL_RPM "RPM   : "
+#define RPM_LOOP_LABEL_PASS "PASS  : "
+#define RPM_LOOP_LABEL_FAIL "FAIL  : "
+#define RPM_LOOP_LABEL_LAST "LAST  : "
+#define RPM_LOOP_LABEL_INFO "INFO  : "
+#define MOTOR_DRIVE_LABEL_MOTOR "MOTOR : "
+#define MOTOR_DRIVE_LABEL_ST3 "ST3   : "
+#define MOTOR_DRIVE_LABEL_READY "READY : "
+#define MOTOR_DRIVE_LABEL_WPROT "WPROT : "
+#define MOTOR_DRIVE_LABEL_TRACK0 "TRACK0: "
+#define MOTOR_DRIVE_LABEL_FAULT "FAULT : "
+#define READ_ID_PROBE_LABEL_ST3 "ST3   : "
+#define READ_ID_PROBE_LABEL_READY "READY : "
+#define READ_ID_PROBE_LABEL_WPROT "WPROT : "
+#define READ_ID_PROBE_LABEL_TRACK0 "TRACK0: "
+#define READ_ID_PROBE_LABEL_FAULT "FAULT : "
+#define READ_ID_PROBE_LABEL_ID "ID    : "
+#define RECAL_SEEK_LABEL_READY "READY : "
+#define RECAL_SEEK_LABEL_RECAL "RECAL : "
+#define RECAL_SEEK_LABEL_SEEK "SEEK  : "
+#define RECAL_SEEK_LABEL_DETAIL "DETAIL: "
+#define READ_ID_LABEL_MEDIA "MEDIA : "
+#define READ_ID_LABEL_STS "STS   : "
+#define READ_ID_LABEL_READY "READY : "
+#define READ_ID_LABEL_CHRN "CHRN  : "
+#define READ_ID_LABEL_DETAIL "DETAIL: "
+#define INTERACTIVE_SEEK_LABEL_READY "READY : "
+#define INTERACTIVE_SEEK_LABEL_TRACK "TRACK : "
+#define INTERACTIVE_SEEK_LABEL_LAST "LAST  : "
+#define INTERACTIVE_SEEK_LABEL_PCN "PCN   : "
 
 void track_loop_card_init(TrackLoopCard* card) {
   test_card_init(&card->base, "READ TRACK DATA LOOP",
                  "KEYS  : J/K TRACK  ENTER/X EXIT", 5U);
+  track_loop_card_set_last_status(card, "OK");
+  track_loop_card_set_info_status(card, "READY");
 }
 
 void track_loop_card_set_track(TrackLoopCard* card, unsigned char track) {
-  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "TRACK : %3u",
+  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%s%3u", TRACK_LOOP_LABEL_TRACK,
            (unsigned int)track);
 }
 
 void track_loop_card_set_counts(TrackLoopCard* card, unsigned int pass_count,
                                 unsigned int fail_count) {
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "PASS  : %3u", pass_count);
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "FAIL  : %3u", fail_count);
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%s%3u", TRACK_LOOP_LABEL_PASS,
+           pass_count);
+  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "%s%3u", TRACK_LOOP_LABEL_FAIL,
+           fail_count);
 }
 
-void track_loop_card_set_last(TrackLoopCard* card, const char* last) {
-  test_card_set_line(&card->base, 3U, last ? last : "LAST  : OK");
+void track_loop_card_set_last_status(TrackLoopCard* card,
+                                     const char* status_value) {
+  test_card_set_labeled_value(&card->base, 3U, TRACK_LOOP_LABEL_LAST,
+                              status_value, "OK");
 }
 
-void track_loop_card_set_info(TrackLoopCard* card, const char* info) {
-  test_card_set_line(&card->base, 4U, info ? info : "INFO  : READY");
+void track_loop_card_set_info_status(TrackLoopCard* card,
+                                     const char* status_value) {
+  test_card_set_labeled_value(&card->base, 4U, TRACK_LOOP_LABEL_INFO,
+                              status_value, "READY");
+}
+
+void track_loop_card_set_active(TrackLoopCard* card) {
+  track_loop_card_set_last_status(card, "OK");
+  track_loop_card_set_info_status(card, "LOOPING");
+}
+
+void track_loop_card_set_drive_not_ready(TrackLoopCard* card,
+                                         unsigned char st3) {
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sDRIVE NR ST3=%02X",
+           TRACK_LOOP_LABEL_LAST, st3);
+  track_loop_card_set_info_status(card, "RETRYING");
+}
+
+void track_loop_card_set_seek_fail(TrackLoopCard* card, unsigned char track,
+                                   unsigned char st0) {
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sSEEK FAIL T=%u",
+           TRACK_LOOP_LABEL_LAST, (unsigned int)track);
+  snprintf(card->base.text[4], TEST_CARD_LINE_LEN, "%sST0=%02X",
+           TRACK_LOOP_LABEL_INFO, st0);
+}
+
+void track_loop_card_set_read_id_fail(TrackLoopCard* card, unsigned char track,
+                                      const char* reason) {
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sRID FAIL T=%u",
+           TRACK_LOOP_LABEL_LAST, (unsigned int)track);
+  track_loop_card_set_info_status(card, reason ? reason : "UNKNOWN");
+}
+
+void track_loop_card_set_bad_sector_size(TrackLoopCard* card,
+                                         unsigned char size_code) {
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sRID N=%u BAD",
+           TRACK_LOOP_LABEL_LAST, (unsigned int)size_code);
+  track_loop_card_set_info_status(card, "INVALID SECTOR SIZE");
+}
+
+void track_loop_card_set_read_fail(TrackLoopCard* card, unsigned char track,
+                                   const char* reason) {
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sREAD FAIL T=%u",
+           TRACK_LOOP_LABEL_LAST, (unsigned int)track);
+  track_loop_card_set_info_status(card, reason ? reason : "UNKNOWN");
+}
+
+void track_loop_card_set_stopped(TrackLoopCard* card) {
+  track_loop_card_set_last_status(card, "STOPPED");
+  track_loop_card_set_info_status(card, "USER EXIT");
 }
 
 void track_loop_card_render(const TrackLoopCard* card, TestCardResult result) {
@@ -749,29 +924,74 @@ void track_loop_card_render(const TrackLoopCard* card, TestCardResult result) {
 void rpm_loop_card_init(RpmLoopCard* card) {
   test_card_init(&card->base, "DISK RPM CHECK LOOP", "KEYS  : ENTER/X EXIT",
                  5U);
+  rpm_loop_card_set_last_status(card, "WAITING");
+  rpm_loop_card_set_info_status(card, "READY");
 }
 
 void rpm_loop_card_set_rpm(RpmLoopCard* card, unsigned int rpm,
                            unsigned char rpm_valid) {
   if (rpm_valid) {
-    snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "RPM   : %3u", rpm);
+    snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%s%3u", RPM_LOOP_LABEL_RPM,
+             rpm);
   } else {
-    test_card_set_line(&card->base, 0U, "RPM   : ---");
+    test_card_set_labeled_value(&card->base, 0U, RPM_LOOP_LABEL_RPM, "---", "---");
   }
 }
 
 void rpm_loop_card_set_counts(RpmLoopCard* card, unsigned int pass_count,
                               unsigned int fail_count) {
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "PASS  : %3u", pass_count);
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "FAIL  : %3u", fail_count);
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%s%3u", RPM_LOOP_LABEL_PASS,
+           pass_count);
+  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "%s%3u", RPM_LOOP_LABEL_FAIL,
+           fail_count);
 }
 
-void rpm_loop_card_set_last(RpmLoopCard* card, const char* last) {
-  test_card_set_line(&card->base, 3U, last ? last : "LAST  : WAITING");
+void rpm_loop_card_set_last_status(RpmLoopCard* card,
+                                   const char* status_value) {
+  test_card_set_labeled_value(&card->base, 3U, RPM_LOOP_LABEL_LAST,
+                              status_value, "WAITING");
 }
 
-void rpm_loop_card_set_info(RpmLoopCard* card, const char* info) {
-  test_card_set_line(&card->base, 4U, info ? info : "INFO  : READY");
+void rpm_loop_card_set_info_status(RpmLoopCard* card,
+                                   const char* status_value) {
+  test_card_set_labeled_value(&card->base, 4U, RPM_LOOP_LABEL_INFO,
+                              status_value, "READY");
+}
+
+void rpm_loop_card_set_drive_not_ready(RpmLoopCard* card) {
+  rpm_loop_card_set_last_status(card, "DRIVE NOT READY");
+  rpm_loop_card_set_info_status(card, "CHECK MEDIA");
+}
+
+void rpm_loop_card_set_seek_fail(RpmLoopCard* card) {
+  rpm_loop_card_set_last_status(card, "SEEK TRACK0 FAIL");
+  rpm_loop_card_set_info_status(card, "ST0 SET");
+}
+
+void rpm_loop_card_set_id_fail(RpmLoopCard* card, const char* reason) {
+  rpm_loop_card_set_last_status(card, "ID FAIL");
+  rpm_loop_card_set_info_status(card, reason ? reason : "UNKNOWN");
+}
+
+void rpm_loop_card_set_no_measurement(RpmLoopCard* card,
+                                      unsigned char seen_other) {
+  rpm_loop_card_set_last_status(card, "RPM N/A");
+  rpm_loop_card_set_info_status(card, seen_other ? "NO REV MARK" : "SAME SEC");
+}
+
+void rpm_loop_card_set_period_bad(RpmLoopCard* card) {
+  rpm_loop_card_set_last_status(card, "PERIOD BAD");
+  rpm_loop_card_set_info_status(card, "ZERO DELTA");
+}
+
+void rpm_loop_card_set_sample_ready(RpmLoopCard* card) {
+  rpm_loop_card_set_last_status(card, "SAMPLE OK");
+  rpm_loop_card_set_info_status(card, "PERIOD READY");
+}
+
+void rpm_loop_card_set_stopped(RpmLoopCard* card) {
+  rpm_loop_card_set_last_status(card, "STOPPED");
+  rpm_loop_card_set_info_status(card, "USER EXIT");
 }
 
 void rpm_loop_card_render(const RpmLoopCard* card, TestCardResult result) {
@@ -783,42 +1003,43 @@ void motor_drive_card_init(MotorDriveCard* card, const char* controls) {
 }
 
 void motor_drive_card_set_unknown(MotorDriveCard* card) {
-  test_card_set_line(&card->base, 1U, "ST3   : ---");
-  test_card_set_line(&card->base, 2U, "READY : ---");
-  test_card_set_line(&card->base, 3U, "WPROT : ---");
-  test_card_set_line(&card->base, 4U, "TRACK0: ---");
-  test_card_set_line(&card->base, 5U, "FAULT : ---");
+  test_card_set_labeled_value(&card->base, 1U, MOTOR_DRIVE_LABEL_ST3, "---", "---");
+  test_card_set_labeled_value(&card->base, 2U, MOTOR_DRIVE_LABEL_READY, "---", "---");
+  test_card_set_labeled_value(&card->base, 3U, MOTOR_DRIVE_LABEL_WPROT, "---", "---");
+  test_card_set_labeled_value(&card->base, 4U, MOTOR_DRIVE_LABEL_TRACK0, "---", "---");
+  test_card_set_labeled_value(&card->base, 5U, MOTOR_DRIVE_LABEL_FAULT, "---", "---");
 }
 
 void motor_drive_card_set_motor_on(MotorDriveCard* card) {
-  test_card_set_line(&card->base, 0U, "MOTOR : ON");
+  test_card_set_labeled_value(&card->base, 0U, MOTOR_DRIVE_LABEL_MOTOR, "ON", "ON");
 }
 
 void motor_drive_card_set_motor_off(MotorDriveCard* card) {
-  test_card_set_line(&card->base, 0U, "MOTOR : OFF");
+  test_card_set_labeled_value(&card->base, 0U, MOTOR_DRIVE_LABEL_MOTOR, "OFF", "OFF");
 }
 
 void motor_drive_card_set_drive_status(MotorDriveCard* card,
                                        unsigned char have_st3,
                                        unsigned char st3) {
   if (!have_st3) {
-    test_card_set_line(&card->base, 1U, "ST3   : TIMEOUT");
-    test_card_set_line(&card->base, 2U, "READY : NO");
-    test_card_set_line(&card->base, 3U, "WPROT : NO");
-    test_card_set_line(&card->base, 4U, "TRACK0: NO");
-    test_card_set_line(&card->base, 5U, "FAULT : NO");
+    test_card_set_labeled_value(&card->base, 1U, MOTOR_DRIVE_LABEL_ST3, "TIMEOUT", "TIMEOUT");
+    test_card_set_labeled_value(&card->base, 2U, MOTOR_DRIVE_LABEL_READY, "NO", "NO");
+    test_card_set_labeled_value(&card->base, 3U, MOTOR_DRIVE_LABEL_WPROT, "NO", "NO");
+    test_card_set_labeled_value(&card->base, 4U, MOTOR_DRIVE_LABEL_TRACK0, "NO", "NO");
+    test_card_set_labeled_value(&card->base, 5U, MOTOR_DRIVE_LABEL_FAULT, "NO", "NO");
     return;
   }
 
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "ST3   : 0x%02X", st3);
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "READY : %s",
-           yes_no_text(st3 & 0x20));
-  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "WPROT : %s",
-           yes_no_text(st3 & 0x40));
-  snprintf(card->base.text[4], TEST_CARD_LINE_LEN, "TRACK0: %s",
-           yes_no_text(st3 & 0x10));
-  snprintf(card->base.text[5], TEST_CARD_LINE_LEN, "FAULT : %s",
-           yes_no_text(st3 & 0x80));
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%s0x%02X", MOTOR_DRIVE_LABEL_ST3,
+           st3);
+  test_card_set_labeled_value(&card->base, 2U, MOTOR_DRIVE_LABEL_READY,
+                              yes_no_text(st3 & 0x20), "NO");
+  test_card_set_labeled_value(&card->base, 3U, MOTOR_DRIVE_LABEL_WPROT,
+                              yes_no_text(st3 & 0x40), "NO");
+  test_card_set_labeled_value(&card->base, 4U, MOTOR_DRIVE_LABEL_TRACK0,
+                              yes_no_text(st3 & 0x10), "NO");
+  test_card_set_labeled_value(&card->base, 5U, MOTOR_DRIVE_LABEL_FAULT,
+                              yes_no_text(st3 & 0x80), "NO");
 }
 
 void motor_drive_card_render(const MotorDriveCard* card, TestCardResult result) {
@@ -827,50 +1048,56 @@ void motor_drive_card_render(const MotorDriveCard* card, TestCardResult result) 
 
 void read_id_probe_card_init(ReadIdProbeCard* card, const char* controls) {
   test_card_init(&card->base, "DRIVE READ ID PROBE", controls, 6U);
+  read_id_probe_card_set_unknown(card);
+  read_id_probe_card_set_id_status(card, "UNKNOWN");
 }
 
 void read_id_probe_card_set_unknown(ReadIdProbeCard* card) {
-  test_card_set_line(&card->base, 0U, "ST3   : ---");
-  test_card_set_line(&card->base, 1U, "READY : ---");
-  test_card_set_line(&card->base, 2U, "WPROT : ---");
-  test_card_set_line(&card->base, 3U, "TRACK0: ---");
-  test_card_set_line(&card->base, 4U, "FAULT : ---");
+  test_card_set_labeled_value(&card->base, 0U, READ_ID_PROBE_LABEL_ST3, "---", "---");
+  test_card_set_labeled_value(&card->base, 1U, READ_ID_PROBE_LABEL_READY, "---", "---");
+  test_card_set_labeled_value(&card->base, 2U, READ_ID_PROBE_LABEL_WPROT, "---", "---");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_PROBE_LABEL_TRACK0, "---", "---");
+  test_card_set_labeled_value(&card->base, 4U, READ_ID_PROBE_LABEL_FAULT, "---", "---");
 }
 
-void read_id_probe_card_set_id_text(ReadIdProbeCard* card, const char* text) {
-  test_card_set_line(&card->base, 5U, text ? text : "ID    : UNKNOWN");
+void read_id_probe_card_set_id_status(ReadIdProbeCard* card,
+                                      const char* status_value) {
+  test_card_set_labeled_value(&card->base, 5U, READ_ID_PROBE_LABEL_ID,
+                              status_value, "UNKNOWN");
 }
 
 void read_id_probe_card_set_drive_status(ReadIdProbeCard* card,
                                          unsigned char have_st3,
                                          unsigned char st3) {
   if (!have_st3) {
-    test_card_set_line(&card->base, 0U, "ST3   : TIMEOUT");
+    test_card_set_labeled_value(&card->base, 0U, READ_ID_PROBE_LABEL_ST3,
+                                "TIMEOUT", "TIMEOUT");
   } else {
-    snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "ST3   : 0x%02X", st3);
+    snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%s0x%02X",
+             READ_ID_PROBE_LABEL_ST3, st3);
   }
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "READY : %s",
-           yes_no_text(have_st3 && (st3 & 0x20)));
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "WPROT : %s",
-           yes_no_text(have_st3 && (st3 & 0x40)));
-  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "TRACK0: %s",
-           yes_no_text(have_st3 && (st3 & 0x10)));
-  snprintf(card->base.text[4], TEST_CARD_LINE_LEN, "FAULT : %s",
-           yes_no_text(have_st3 && (st3 & 0x80)));
+  test_card_set_labeled_value(&card->base, 1U, READ_ID_PROBE_LABEL_READY,
+                              yes_no_text(have_st3 && (st3 & 0x20)), "NO");
+  test_card_set_labeled_value(&card->base, 2U, READ_ID_PROBE_LABEL_WPROT,
+                              yes_no_text(have_st3 && (st3 & 0x40)), "NO");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_PROBE_LABEL_TRACK0,
+                              yes_no_text(have_st3 && (st3 & 0x10)), "NO");
+  test_card_set_labeled_value(&card->base, 4U, READ_ID_PROBE_LABEL_FAULT,
+                              yes_no_text(have_st3 && (st3 & 0x80)), "NO");
 }
 
 void read_id_probe_card_set_id_chrn(ReadIdProbeCard* card, unsigned char c,
                                     unsigned char h, unsigned char r,
                                     unsigned char n) {
-  snprintf(card->base.text[5], TEST_CARD_LINE_LEN, "ID    : C%u H%u R%u N%u",
-           (unsigned int)c, (unsigned int)h, (unsigned int)r,
-           (unsigned int)n);
+  snprintf(card->base.text[5], TEST_CARD_LINE_LEN, "%sC%u H%u R%u N%u",
+           READ_ID_PROBE_LABEL_ID, (unsigned int)c, (unsigned int)h,
+           (unsigned int)r, (unsigned int)n);
 }
 
 void read_id_probe_card_set_id_failure(ReadIdProbeCard* card,
                                        const char* reason) {
-  snprintf(card->base.text[5], TEST_CARD_LINE_LEN, "ID    : %s",
-           reason ? reason : "UNKNOWN");
+  test_card_set_labeled_value(&card->base, 5U, READ_ID_PROBE_LABEL_ID,
+                              reason, "UNKNOWN");
 }
 
 void read_id_probe_card_render(const ReadIdProbeCard* card,
@@ -883,49 +1110,51 @@ void recal_seek_card_init(RecalSeekCard* card, const char* controls) {
 }
 
 void recal_seek_card_set_unknown(RecalSeekCard* card) {
-  test_card_set_line(&card->base, 0U, "READY : ---");
-  test_card_set_line(&card->base, 1U, "RECAL : ---");
-  test_card_set_line(&card->base, 2U, "SEEK  : ---");
-  test_card_set_line(&card->base, 3U, "DETAIL: ---");
+  test_card_set_labeled_value(&card->base, 0U, RECAL_SEEK_LABEL_READY, "---", "---");
+  test_card_set_labeled_value(&card->base, 1U, RECAL_SEEK_LABEL_RECAL, "---", "---");
+  test_card_set_labeled_value(&card->base, 2U, RECAL_SEEK_LABEL_SEEK, "---", "---");
+  test_card_set_labeled_value(&card->base, 3U, RECAL_SEEK_LABEL_DETAIL, "---", "---");
 }
 
 void recal_seek_card_set_ready_yes(RecalSeekCard* card) {
-  test_card_set_line(&card->base, 0U, "READY : YES");
+  test_card_set_labeled_value(&card->base, 0U, RECAL_SEEK_LABEL_READY, "YES", "YES");
 }
 
 void recal_seek_card_set_ready_fail_st3(RecalSeekCard* card,
                                         unsigned char st3) {
-  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "READY : FAIL ST3=%02X",
-           st3);
+  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%sFAIL ST3=%02X",
+           RECAL_SEEK_LABEL_READY, st3);
 }
 
 void recal_seek_card_set_recal_status(RecalSeekCard* card,
                                       RecalSeekStatus status) {
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "RECAL : %s",
-           recal_seek_status_text(status));
+  test_card_set_labeled_value(&card->base, 1U, RECAL_SEEK_LABEL_RECAL,
+                              recal_seek_status_text(status), "---");
 }
 
 void recal_seek_card_set_seek_status(RecalSeekCard* card,
                                      RecalSeekStatus status) {
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "SEEK  : %s",
-           recal_seek_status_text(status));
+  test_card_set_labeled_value(&card->base, 2U, RECAL_SEEK_LABEL_SEEK,
+                              recal_seek_status_text(status), "---");
 }
 
-void recal_seek_card_set_detail_text(RecalSeekCard* card, const char* text) {
-  test_card_set_line(&card->base, 3U, text ? text : "DETAIL: ---");
+void recal_seek_card_set_detail_status(RecalSeekCard* card,
+                                       const char* status_value) {
+  test_card_set_labeled_value(&card->base, 3U, RECAL_SEEK_LABEL_DETAIL,
+                              status_value, "---");
 }
 
 void recal_seek_card_set_detail_st0_pcn(RecalSeekCard* card,
                                         unsigned char st0,
                                         unsigned char pcn) {
-  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "DETAIL: ST0=%02X PCN=%u",
-           st0, (unsigned int)pcn);
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sST0=%02X PCN=%u",
+           RECAL_SEEK_LABEL_DETAIL, st0, (unsigned int)pcn);
 }
 
 void recal_seek_card_set_detail_track(RecalSeekCard* card,
                                       unsigned char track) {
-  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "DETAIL: TRACK %u",
-           (unsigned int)track);
+  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "%sTRACK %u",
+           RECAL_SEEK_LABEL_DETAIL, (unsigned int)track);
 }
 
 void recal_seek_card_render(const RecalSeekCard* card, TestCardResult result) {
@@ -937,54 +1166,65 @@ void read_id_card_init(ReadIdCard* card, const char* controls) {
 }
 
 void read_id_card_set_waiting(ReadIdCard* card) {
-  test_card_set_line(&card->base, 0U, "MEDIA : READABLE DISK REQUIRED");
-  test_card_set_line(&card->base, 1U, "STS   : --/--/--");
-  test_card_set_line(&card->base, 2U, "CHRN  : INVALID");
-  test_card_set_line(&card->base, 3U, "DETAIL: WAITING");
+  test_card_set_labeled_value(&card->base, 0U, READ_ID_LABEL_MEDIA,
+                              "READABLE DISK REQUIRED", "READABLE DISK REQUIRED");
+  test_card_set_labeled_value(&card->base, 1U, READ_ID_LABEL_STS, "--/--/--", "--/--/--");
+  test_card_set_labeled_value(&card->base, 2U, READ_ID_LABEL_CHRN, "INVALID", "INVALID");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_LABEL_DETAIL, "WAITING", "WAITING");
 }
 
 void read_id_card_set_reading(ReadIdCard* card) {
-  test_card_set_line(&card->base, 3U, "DETAIL: READING ID");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_LABEL_DETAIL,
+                              "READING ID", "READING ID");
 }
 
 void read_id_card_set_drive_not_ready(ReadIdCard* card, unsigned char st3) {
-  test_card_set_line(&card->base, 0U, "MEDIA : READABLE DISK REQUIRED");
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "READY : ST3=%02X", st3);
-  test_card_set_line(&card->base, 2U, "CHRN  : INVALID");
-  test_card_set_line(&card->base, 3U, "DETAIL: DRIVE NOT READY");
+  test_card_set_labeled_value(&card->base, 0U, READ_ID_LABEL_MEDIA,
+                              "READABLE DISK REQUIRED", "READABLE DISK REQUIRED");
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%sST3=%02X", READ_ID_LABEL_READY,
+           st3);
+  test_card_set_labeled_value(&card->base, 2U, READ_ID_LABEL_CHRN, "INVALID", "INVALID");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_LABEL_DETAIL,
+                              "DRIVE NOT READY", "DRIVE NOT READY");
 }
 
 void read_id_card_set_status(ReadIdCard* card, unsigned char st0,
                              unsigned char st1, unsigned char st2) {
-  test_card_set_line(&card->base, 0U, "MEDIA : READABLE DISK REQUIRED");
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "STS   : %02X/%02X/%02X",
-           st0, st1, st2);
+  test_card_set_labeled_value(&card->base, 0U, READ_ID_LABEL_MEDIA,
+                              "READABLE DISK REQUIRED", "READABLE DISK REQUIRED");
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%s%02X/%02X/%02X",
+           READ_ID_LABEL_STS, st0, st1, st2);
 }
 
 void read_id_card_set_chrn_valid(ReadIdCard* card, unsigned char c,
                                  unsigned char h, unsigned char r,
                                  unsigned char n) {
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "CHRN  : %u/%u/%u/%u",
-           (unsigned int)c, (unsigned int)h, (unsigned int)r,
-           (unsigned int)n);
+  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "%s%u/%u/%u/%u",
+           READ_ID_LABEL_CHRN, (unsigned int)c, (unsigned int)h,
+           (unsigned int)r, (unsigned int)n);
 }
 
-void read_id_card_set_chrn_text(ReadIdCard* card, const char* text) {
-  test_card_set_line(&card->base, 2U, text ? text : "CHRN  : INVALID");
+void read_id_card_set_chrn_status(ReadIdCard* card,
+                                  const char* status_value) {
+  test_card_set_labeled_value(&card->base, 2U, READ_ID_LABEL_CHRN,
+                              status_value, "INVALID");
 }
 
-void read_id_card_set_detail_text(ReadIdCard* card, const char* text) {
-  test_card_set_line(&card->base, 3U, text ? text : "DETAIL: ---");
+void read_id_card_set_detail_status(ReadIdCard* card,
+                                    const char* status_value) {
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_LABEL_DETAIL,
+                              status_value, "---");
 }
 
 void read_id_card_set_detail_failure(ReadIdCard* card, const char* reason) {
-  snprintf(card->base.text[3], TEST_CARD_LINE_LEN, "DETAIL: %s",
-           reason ? reason : "UNKNOWN");
+  test_card_set_labeled_value(&card->base, 3U, READ_ID_LABEL_DETAIL,
+                              reason, "UNKNOWN");
 }
 
 void read_id_card_render(const ReadIdCard* card, TestCardResult result) {
   test_card_render_result(&card->base, result);
 }
+
 
 void interactive_seek_card_init(InteractiveSeekCard* card,
                                 const char* controls) {
@@ -993,30 +1233,32 @@ void interactive_seek_card_init(InteractiveSeekCard* card,
 
 void interactive_seek_card_set_ready_fail(InteractiveSeekCard* card,
                                           unsigned char st3) {
-  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "READY : FAIL ST3=%02X",
-           st3);
+  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%sFAIL ST3=%02X",
+           INTERACTIVE_SEEK_LABEL_READY, st3);
 }
 
 void interactive_seek_card_set_track(InteractiveSeekCard* card,
                                      unsigned char track) {
-  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "TRACK : %u",
-           (unsigned int)track);
+  snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%s%u",
+           INTERACTIVE_SEEK_LABEL_TRACK, (unsigned int)track);
 }
 
 void interactive_seek_card_set_last_st0(InteractiveSeekCard* card,
                                         unsigned char st0) {
-  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "LAST  : ST0=%02X", st0);
+  snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%sST0=%02X",
+           INTERACTIVE_SEEK_LABEL_LAST, st0);
 }
 
-void interactive_seek_card_set_last_text(InteractiveSeekCard* card,
-                                         const char* text) {
-  test_card_set_line(&card->base, 1U, text ? text : "LAST  : ---");
+void interactive_seek_card_set_last_status(InteractiveSeekCard* card,
+                                           const char* status_value) {
+  test_card_set_labeled_value(&card->base, 1U, INTERACTIVE_SEEK_LABEL_LAST,
+                              status_value, "---");
 }
 
 void interactive_seek_card_set_pcn(InteractiveSeekCard* card,
                                    unsigned char pcn) {
-  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "PCN   : %u",
-           (unsigned int)pcn);
+  snprintf(card->base.text[2], TEST_CARD_LINE_LEN, "%s%u",
+           INTERACTIVE_SEEK_LABEL_PCN, (unsigned int)pcn);
 }
 
 void interactive_seek_card_render(const InteractiveSeekCard* card,

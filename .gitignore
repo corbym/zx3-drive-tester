@@ -60,5 +60,25 @@ dkms.conf
 *.dwo
 #build directory
 out/
+compile_commands.json
 .DS_Store
 **/.DS_Store
+
+# CMake
+CMakeLists.txt
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+CMakePresets.json
+cmake-build-*/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+
+# JetBrains IDE — generated/local files
+.idea/editor.xml
+.idea/c_cpp_properties.json
+
+/.idea/copilotDiffState.xml

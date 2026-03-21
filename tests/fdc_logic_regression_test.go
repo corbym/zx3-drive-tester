@@ -18,6 +18,16 @@ func loadDiskTesterSource(t *testing.T) string {
 	return string(data)
 }
 
+func loadDiskOperationsSource(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "disk_operations.c")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	return string(data)
+}
+
 func loadUiSource(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join("..", "ui.c")
@@ -29,13 +39,14 @@ func loadUiSource(t *testing.T) string {
 }
 
 func TestReadDataAcceptsTcNotWiredCompletion(t *testing.T) {
-	src := loadDiskTesterSource(t)
+	src := loadDiskOperationsSource(t)
 
 	requiredSnippets := []string{
-		"(*out_st0 & 0xC0) == 0x40",
-		"(*out_st1 & 0x80) != 0",
-		"(*out_st1 & 0x7F) == 0",
-		"(*out_st2 == 0)",
+		"(out_result->status.st0 & FDC_ST0_INTERRUPT_CODE_MASK) ==",
+		"FDC_ST0_INTERRUPT_ABNORMAL_TERMINATION",
+		"(out_result->status.st1 & FDC_ST1_END_OF_CYLINDER) != 0",
+		"(out_result->status.st1 & FDC_ST1_OTHER_ERROR_MASK) == 0",
+		"out_result->status.st2 == 0",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(src, snippet) {
@@ -45,16 +56,17 @@ func TestReadDataAcceptsTcNotWiredCompletion(t *testing.T) {
 }
 
 func TestReadDataUsesTightExecutionPhaseReadPath(t *testing.T) {
-	src := loadDiskTesterSource(t)
+	src := loadDiskOperationsSource(t)
 
-	if !strings.Contains(src, "static unsigned char fdc_read_data_byte(unsigned char* out)") {
+	helperSig := regexp.MustCompile(`static\s+unsigned\s+char\s+fdc_read_data_byte\s*\(\s*unsigned\s+char\s*\*\s*out\s*\)`)
+	if !helperSig.MatchString(src) {
 		t.Fatalf("missing dedicated execution-phase read helper")
 	}
 	if !strings.Contains(src, "if (!fdc_read_data_byte(&data[i])) return 0;") {
 		t.Fatalf("cmd_read_data is not using tight execution-phase read helper")
 	}
 
-	helperBody := regexp.MustCompile(`(?s)static unsigned char fdc_read_data_byte\(unsigned char\* out\) \{(.*?)\n\}`)
+	helperBody := regexp.MustCompile(`(?s)static\s+unsigned\s+char\s+fdc_read_data_byte\s*\(\s*unsigned\s+char\s*\*\s*out\s*\)\s*\{(.*?)\n}`)
 	match := helperBody.FindStringSubmatch(src)
 	if len(match) < 2 {
 		t.Fatalf("could not parse fdc_read_data_byte body")
@@ -65,7 +77,7 @@ func TestReadDataUsesTightExecutionPhaseReadPath(t *testing.T) {
 }
 
 func TestReadIdFailureReasonDoesNotContainWriteOrScanOnlyBits(t *testing.T) {
-	src := loadDiskTesterSource(t)
+	src := loadDiskOperationsSource(t)
 
 	forbidden := []string{
 		"return \"Write protect\"",
@@ -80,7 +92,7 @@ func TestReadIdFailureReasonDoesNotContainWriteOrScanOnlyBits(t *testing.T) {
 }
 
 func TestCommandGapConstantUsesCalibratedUnitsNaming(t *testing.T) {
-	src := loadDiskTesterSource(t)
+	src := loadDiskOperationsSource(t)
 
 	if strings.Contains(src, "FDC_CMD_BYTE_GAP_US") {
 		t.Fatalf("legacy gap constant name FDC_CMD_BYTE_GAP_US should not be present")

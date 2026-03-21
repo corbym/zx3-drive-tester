@@ -36,6 +36,18 @@ Reference documentation used for +3 FDC behavior:
 - [Spectrum +3 disc controller (NEC uPD765) - problemkaputt.de](https://problemkaputt.de/zxdocs.htm#spectrumdiscspectrum3disccontrollernecupd765)
 - [uPD765A Disc Controller Primer - muckypaws.com](https://muckypaws.com/2024/02/25/%C2%B5pd765a-disc-controller-primer/)
 
+## Low-level disk operations
+
+The low-level controller protocol lives in `disk_operations.c` / `disk_operations.h`.
+
+- wraps motor and FDC command sequencing (`cmd_read_id`, `cmd_read_data`, seek/recal)
+- exposes typed command results (`FdcStatus`, `FdcChrn`, `FdcResult`, `FdcSeekResult`)
+- keeps uPD765 result ordering explicit (`ST0/ST1/ST2 + CHRN`)
+
+For field-level behavior and status-bit meaning, use the same references above:
+- [Spectrum +3 disc controller (NEC uPD765) - problemkaputt.de](https://problemkaputt.de/zxdocs.htm#spectrumdiscspectrum3disccontrollernecupd765)
+- [uPD765A Disc Controller Primer - muckypaws.com](https://muckypaws.com/2024/02/25/%C2%B5pd765a-disc-controller-primer/)
+
 ## Build
 
 ### Prerequisites
@@ -114,6 +126,8 @@ The smoke workflow runs with `ZX3_REQUIRE_EMU_SMOKE=1` and uploads staged UI scr
 
 - `disk_tester.c` – Main program logic (tests, menu, I/O handling)
 - `disk_tester.h` – Helper declarations
+- `disk_operations.c` – Low-level FDC command layer and motor sequencing
+- `disk_operations.h` – Low-level FDC operation API and result structs
 - `menu_system.c` – Input/model layer (key scanning, menu items, navigation)
 - `menu_system.h` – Menu system interface
 - `intstate.asm` – Low-level port I/O and motor control (Z80 assembly)

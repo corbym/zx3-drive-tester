@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/zx3-disk-test.iml" filepath="$PROJECT_DIR$/.idea/zx3-disk-test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/zx3-disk-test.CMake.iml" filepath="$PROJECT_DIR$/.idea/zx3-disk-test.CMake.iml" />
     </modules>
   </component>
 </project>
