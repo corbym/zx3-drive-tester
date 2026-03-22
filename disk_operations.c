@@ -92,7 +92,7 @@ typedef struct {
 
 void delay_ms(unsigned int millis) {
     for (unsigned int outer = 0; outer < millis; outer++) {
-        for (unsigned int inner = 0; inner < LOOPS_PER_MS; inner++) {
+        for (unsigned char inner = 0; inner < LOOPS_PER_MS; inner++) {
             delay_spin_sink++;
         }
     }
@@ -100,10 +100,10 @@ void delay_ms(unsigned int millis) {
 
 /* Sub-millisecond pacing for FDC command-byte gaps.
  * Bracketed with DI/EI so IM1 interrupts cannot stretch the gap. */
-static void delay_us_approx(unsigned int units) {
+static void delay_us_approx(unsigned char units) {
     intrinsic_di();
-    for (unsigned int i = 0; i < units; i++) {
-        for (unsigned int j = 0; j < 4U; j++) {
+    for (unsigned char i = 0; i < units; i++) {
+        for (unsigned char j = 0; j < 4U; j++) {
             delay_spin_sink++;
         }
     }
@@ -121,7 +121,7 @@ unsigned short frame_ticks(void) {
 
 /* Wait until RQM is set and DIO matches the desired direction.
    want_dio = 0 → CPU→FDC (write);  want_dio = 1 → FDC→CPU (read). */
-static unsigned char fdc_wait_rqm(unsigned char want_dio,
+static unsigned char fdc_wait_rqm(const unsigned char want_dio,
                                   unsigned int timeout) {
     while (timeout--) {
         unsigned char main_status_register = inportb(FDC_MSR_PORT);

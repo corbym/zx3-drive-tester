@@ -263,7 +263,7 @@ static int scan_runtime_key_event(void) {
         runtime_break_latched = 0;
     }
 
-    for (unsigned int i = 0; i < RUNTIME_KEYMAP_COUNT; i++) {
+    for (unsigned char i = 0; i < RUNTIME_KEYMAP_COUNT; i++) {
         unsigned char pressed = (unsigned char) ((inportb(keymap[i].row_port) &
                                                   keymap[i].bit_mask) == 0);
         if (pressed) {
@@ -377,7 +377,7 @@ static const char *single_shot_test_controls(int interactive) {
 /* Tests                                                                      */
 /* -------------------------------------------------------------------------- */
 
-static void test_motor_and_drive_status(int interactive) {
+static void test_motor_and_drive_status(const char interactive) {
     unsigned char status_3 = 0;
     unsigned char show_live_card = show_selected_test_cards();
     MotorDriveCard motor_drive_card;
@@ -410,7 +410,7 @@ static void test_motor_and_drive_status(int interactive) {
                        : TEST_CARD_RESULT_FAIL);
 }
 
-static void test_read_id_probe(int interactive) {
+static void test_read_id_probe(const char interactive) {
     unsigned char status_3 = 0;
     FdcSeekResult seek_result;
     unsigned char rid_ok = 0;

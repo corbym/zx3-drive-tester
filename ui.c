@@ -63,7 +63,7 @@ static void copy_font_glyph(unsigned char* font, unsigned char dst,
 
 static void apply_compact_font(unsigned char* font) {
   unsigned char ch;
-  unsigned int i;
+  unsigned char i;
   /*
    * Source: epto/epto-fonts (digital-6x6), GPL-2.0 repository.
    * We use an ASCII subset required by the UI.
@@ -189,9 +189,9 @@ void ui_term_clear(void) {
 
 /* ZX Spectrum pixel address layout for an (y, xbyte) position. */
 static unsigned short zx_pixel_offset(unsigned char y, unsigned char xbyte) {
-  return (unsigned short)((((unsigned short)(y & 0xC0U)) << 5) |
-                          (((unsigned short)(y & 0x07U)) << 8) |
-                          (((unsigned short)(y & 0x38U)) << 2) | xbyte);
+  return (unsigned short)((unsigned short)(y & 0xC0U) << 5 |
+                          (unsigned short)(y & 0x07U) << 8 |
+                          (unsigned short)(y & 0x38U) << 2 | xbyte);
 }
 
 static const unsigned char* ui_active_font_ptr(void) {
@@ -202,62 +202,35 @@ static const unsigned char* ui_active_font_ptr(void) {
 #endif
 }
 
-void ui_attr_set_cell(unsigned char row, unsigned char col,
-                      unsigned char ink, unsigned char paper,
-                      unsigned char bright) {
+void ui_attr_set_cell(const unsigned char row, unsigned char col,
+                      const unsigned char ink, unsigned char paper,
+                      const unsigned char bright) {
   volatile unsigned char* attr = (volatile unsigned char*)ZX_ATTR_BASE;
   if (row >= 24 || col >= 32) return;
   attr[(unsigned short)row * 32U + col] =
-      (unsigned char)(((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
-                      (ink & 0x07U));
+      (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
+                      ink & 0x07U);
 }
 
 /* Fill all 768 attribute cells in one memset (replaces 768 ui_attr_set_cell
  * calls in the original loop, critical for first-render latency on Z80). */
-void ui_attr_fill(unsigned char ink, unsigned char paper, unsigned char bright) {
+void ui_attr_fill(const unsigned char ink, const unsigned char paper, const unsigned char bright) {
   unsigned char attr_byte =
-      (unsigned char)(((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
-                      (ink & 0x07U));
+      (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
+                      ink & 0x07U);
   memset((void*)ZX_ATTR_BASE, attr_byte, ZX_ATTR_SIZE);
 }
 
-void ui_screen_put_char(unsigned char row, unsigned char col, char ch) {
+void ui_screen_put_char(const unsigned char row, const unsigned char col, const char ch) {
   const unsigned char* font = ui_active_font_ptr();
-  const unsigned char* glyph;
-  unsigned char gy;
   unsigned char* pixels = (unsigned char*)ZX_PIXELS_BASE;
 
   if (row >= 24 || col >= 32) return;
-  glyph = &font[((unsigned short)(unsigned char)ch) * 8U];
-  for (gy = 0; gy < 8; gy++) {
+  const unsigned char *glyph = &font[((unsigned short) (unsigned char) ch) * 8U];
+  for (unsigned char gy = 0; gy < 8; gy++) {
     unsigned char y = (unsigned char)(row * 8U + gy);
     pixels[zx_pixel_offset(y, col)] = glyph[gy];
   }
-}
-
-/* Fill a character row with one glyph using per-scanline memset.
- * For each of 8 scanlines the 32 column bytes are contiguous in pixel RAM
- * (xbyte runs 0-31 in the low bits of zx_pixel_offset), so one memset per
- * scanline replaces 32 ui_screen_put_char calls per row. */
-static void ui_screen_fill_row(unsigned char row, char fill, unsigned char ink,
-                               unsigned char paper, unsigned char bright) {
-  const unsigned char* glyph;
-  unsigned char* pixels;
-  volatile unsigned char* attr;
-  unsigned char attr_byte;
-  unsigned char gy;
-
-  if (row >= 24) return;
-  glyph = &ui_active_font_ptr()[((unsigned short)(unsigned char)fill) * 8U];
-  pixels = (unsigned char*)ZX_PIXELS_BASE;
-  for (gy = 0; gy < 8U; gy++) {
-    unsigned char y = (unsigned char)(row * 8U + gy);
-    memset(&pixels[zx_pixel_offset(y, 0)], glyph[gy], 32U);
-  }
-  attr = (volatile unsigned char*)ZX_ATTR_BASE;
-  attr_byte = (unsigned char)(((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
-                              (ink & 0x07U));
-  memset((void*)&attr[(unsigned short)row * 32U], attr_byte, 32U);
 }
 
 /* Write a text row: one attr memset for the full row, direct glyph writes
@@ -268,26 +241,22 @@ static void ui_screen_write_row(unsigned char row, const char* text,
                                 unsigned char ink, unsigned char paper,
                                 unsigned char bright) {
   const unsigned char* font;
-  const unsigned char* glyph;
-  const unsigned char* space_glyph;
   unsigned char* pixels;
   volatile unsigned char* attr;
-  unsigned char attr_byte;
-  unsigned char col;
   unsigned char gy;
 
   if (row >= 24) return;
   font = ui_active_font_ptr();
   pixels = (unsigned char*)ZX_PIXELS_BASE;
   attr = (volatile unsigned char*)ZX_ATTR_BASE;
-  attr_byte = (unsigned char)(((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
-                              (ink & 0x07U));
+  unsigned char attr_byte = (unsigned char) (((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
+                                             (ink & 0x07U));
   memset((void*)&attr[(unsigned short)row * 32U], attr_byte, 32U);
 
-  col = 0;
+  unsigned char col = 0;
   if (text) {
     while (*text && col < 32U) {
-      glyph = &font[((unsigned short)(unsigned char)*text++) * 8U];
+      const unsigned char *glyph = &font[((unsigned short) (unsigned char) *text++) * 8U];
       for (gy = 0; gy < 8U; gy++) {
         unsigned char y = (unsigned char)(row * 8U + gy);
         pixels[zx_pixel_offset(y, col)] = glyph[gy];
@@ -296,6 +265,7 @@ static void ui_screen_write_row(unsigned char row, const char* text,
     }
   }
   if (col < 32U) {
+    const unsigned char* space_glyph;
     space_glyph = &font[((unsigned short)' ') * 8U];
     for (gy = 0; gy < 8U; gy++) {
       unsigned char y = (unsigned char)(row * 8U + gy);
@@ -371,13 +341,19 @@ static unsigned char ui_line_is_alert(const char* text) {
 }
 
 /* Colour N consecutive attribute cells starting at (row, start_col). */
-void ui_attr_set_run(unsigned char row, unsigned char start_col,
-                            unsigned char count,
-                            unsigned char ink, unsigned char paper,
+void ui_attr_set_run(const unsigned char row, const unsigned char start_col,
+                            const unsigned char count,
+                            const unsigned char ink, const unsigned char paper,
                             unsigned char bright) {
-  for (unsigned char i = 0; i < count; i++) {
-    ui_attr_set_cell(row, (unsigned char)(start_col + i), ink, paper, bright);
-  }
+  volatile unsigned char *attr = (volatile unsigned char *)ZX_ATTR_BASE;
+  unsigned char attr_byte;
+  unsigned char safe_count;
+  if (row >= 24 || start_col >= 32 || count == 0) return;
+  attr_byte = (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
+                              ink & 0x07U);
+  safe_count = (unsigned char)(start_col + count > 32U ? 32U - start_col : count);
+  memset((void *)&attr[(unsigned short)row * 32U + start_col], attr_byte,
+         safe_count);
 }
 
 static void ui_highlight_screen_value(unsigned char row,

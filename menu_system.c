@@ -192,7 +192,7 @@ int read_menu_key_blocking(void) {
             menu_down_latched = 0;
         }
 
-        for (unsigned int i = 0; i < MENU_KEYMAP_COUNT; i++) {
+        for (unsigned char i = 0; i < MENU_KEYMAP_COUNT; i++) {
             unsigned char pressed = (unsigned char) ((inportb(menu_keymap[i].row_port) &
                                                       menu_keymap[i].bit_mask) == 0);
             if (pressed) {

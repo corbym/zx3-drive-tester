@@ -50,6 +50,8 @@ A low-level ZX Spectrum +3 floppy drive test utility written in C and Z80 assemb
 | `0x3FFD` | FDC Data | R/W | FDC command/result/data bytes |
 
 **Motor bit behavior**: bit 3 of `0x1FFD` controls the drive motor; clearing it disables the drive. Always read `0x5B67` (BANK678 system variable) before writing to preserve other bits.
+## Critical Memory Requirements
+Always pay attention to the memory footprint of the program. Unless you are adding functionality, you should not be increasing the memory usage. The program must fit within the ZX Spectrum +3's 128KB RAM, and ideally should leave some headroom for future tests or features. Use the `memory_budget_regression_test.go` test to track memory usage changes.
 
 ## Build & Test
 
@@ -140,7 +142,7 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 - **Add a new FDC command**: implement it in `disk_operations.c` following the existing pattern (`fdc_wait_rqm` + `fdc_write`/`fdc_read`); remember return 1=success, 0=failure. Wire it into the test sequence in `disk_tester.c`.
 
 ## Optimizations
-- Always refer to https://www.z88dk.org/wiki/doku.php?id=optimization for z88dk optimization tips. 
+- Always refer to https://www.z88dk.org/wiki/doku.php?id=optimization and https://github.com/z88dk/z88dk/wiki/WritingOptimalCode for z88dk optimization tips. 
 - Run the memory_budget_regression_test.go test to see how much memory is used by the program. Optimize the code to reduce memory usage if required. 
 
 ## Common Tasks
