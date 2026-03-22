@@ -162,3 +162,14 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 - Edit rendering loops in `ui.c` to reposition test cards
 - Rebuild with `COMPACT_UI=0` (default) for real hardware; OCR tests require non-compact variant
 
+# Less common tasks but worth mentioning
+
+** When refactoring the FDC command sequence: **
+- `disk_operations.c` contains the FDC command implementations
+- `intstate.asm` contains the motor control logic
+
+Always refer to 
+- [Spectrum +3 disc controller (NEC uPD765) - problemkaputt.de](https://problemkaputt.de/zxdocs.htm#spectrumdiscspectrum3disccontrollernecupd765)
+- [uPD765A Disc Controller Primer - muckypaws.com](https://muckypaws.com/2024/02/25/%C2%B5pd765a-disc-controller-primer/)
+
+if you are unsure of how to implement a new FDC command or update the current ones.

@@ -313,14 +313,25 @@ static unsigned char ui_text_screen_active;
 static const char* ui_text_screen_title;
 static const char* ui_text_screen_controls;
 /*
- * Per-row dirty cache: one byte per row combining a text checksum with the
- * row style.  Costs only 24 bytes of BSS.  A cache hit skips the expensive
- * pixel+attr write for that row, eliminating most of the visible flicker.
+ * Per-row dirty cache.  ui_row_tag combines a text checksum with the row
+ * style; a full-row cache hit skips the pixel+attr write entirely.
+ *
+ * Value-only update: for TEXT/RESULT rows with a "LABEL: value" format,
+ * after the label has been drawn once we track label and value separately.
+ * When only the value changes, only the value columns are redrawn.
+ *
+ *   ui_row_value_col[r]  — column where the value starts (0xFF = no label drawn)
+ *   ui_row_label_tag[r]  — hash of label portion (text[0..value_col))
+ *   ui_row_value_tag[r]  — hash of value portion (text[value_col..])
  */
 static unsigned char ui_row_tag[24];
+static unsigned char ui_row_value_col[24];
+static unsigned char ui_row_label_tag[24];
+static unsigned char ui_row_value_tag[24];
 
 void ui_reset_text_screen_cache(void) {
   memset(ui_row_tag, 0xFF, sizeof(ui_row_tag));
+  memset(ui_row_value_col, 0xFF, sizeof(ui_row_value_col));
   ui_text_screen_active = 0;
   ui_text_screen_title = 0;
   ui_text_screen_controls = 0;
@@ -409,10 +420,51 @@ static unsigned char ui_row_tag_compute(const char* text, unsigned char style) {
   return (unsigned char)((h & 0xFCU) | (style & 0x03U));
 }
 
+/* Hash text[0..end_col) — used to fingerprint the label portion. */
+static unsigned char ui_hash_to(const char* text, unsigned char end_col) {
+  const unsigned char* p = (const unsigned char*)(text ? text : "");
+  unsigned char h = 0x55U;
+  unsigned char i = 0;
+
+  while (i < end_col && *p) {
+    h = (unsigned char)((h << 1) ^ *p++);
+    i++;
+  }
+  return h;
+}
+
+/* Hash text starting at start_col — used to fingerprint the value portion. */
+static unsigned char ui_hash_from(const char* text, unsigned char start_col) {
+  const unsigned char* p = (const unsigned char*)(text ? text + start_col : "");
+  unsigned char h = 0x55U;
+
+  while (*p) {
+    h = (unsigned char)((h << 1) ^ *p++);
+  }
+  return h;
+}
+
+/* Write only the value portion of a row (cols start_col..31), padding with spaces. */
+static void ui_screen_write_value(unsigned char row, unsigned char start_col,
+                                  const char* value) {
+  unsigned char col = start_col;
+  const char* p = value ? value : "";
+
+  while (col < 32U && *p) {
+    ui_screen_put_char(row, col, *p++);
+    col++;
+  }
+  while (col < 32U) {
+    ui_screen_put_char(row, col, ' ');
+    col++;
+  }
+}
+
 static void ui_render_cached_text_row(unsigned char row, const char* text,
                                       unsigned char row_style) {
   const char* safe_text = text ? text : "";
   unsigned char tag;
+  unsigned char value_col;
 
   if (row >= 24U) return;
 
@@ -421,11 +473,45 @@ static void ui_render_cached_text_row(unsigned char row, const char* text,
     return;  /* Row unchanged — skip redraw. */
   }
 
+  /* Value-only update: label already drawn and column position matches. */
+  if ((row_style == UI_TEXT_ROW_STYLE_TEXT ||
+       row_style == UI_TEXT_ROW_STYLE_RESULT) &&
+      ui_row_value_col[row] != 0xFFU) {
+    value_col = ui_line_value_col(safe_text);
+    if (value_col == ui_row_value_col[row] && value_col < 32U) {
+      if (ui_hash_to(safe_text, value_col) == ui_row_label_tag[row]) {
+        /* Label unchanged — redraw only the value portion. */
+        unsigned char vtag = ui_hash_from(safe_text, value_col);
+        if (vtag != ui_row_value_tag[row]) {
+          ui_screen_write_value(row, value_col, safe_text + value_col);
+          ui_highlight_screen_value(
+              row, value_col, ZX_COLOUR_BLACK,
+              ui_line_is_alert(safe_text) ? ZX_COLOUR_YELLOW : ZX_COLOUR_CYAN,
+              1);
+          ui_row_value_tag[row] = vtag;
+        }
+        ui_row_tag[row] = tag;
+        return;
+      }
+    }
+  }
+
+  /* Full redraw. */
   ui_screen_write_row(row, safe_text, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
 
   if (row_style == UI_TEXT_ROW_STYLE_TEXT ||
       row_style == UI_TEXT_ROW_STYLE_RESULT) {
     ui_style_screen_text_row(row, safe_text);
+    value_col = ui_line_value_col(safe_text);
+    if (value_col < 32U) {
+      ui_row_value_col[row] = value_col;
+      ui_row_label_tag[row] = ui_hash_to(safe_text, value_col);
+      ui_row_value_tag[row] = ui_hash_from(safe_text, value_col);
+    } else {
+      ui_row_value_col[row] = 0xFFU;
+    }
+  } else {
+    ui_row_value_col[row] = 0xFFU;
   }
 
   ui_row_tag[row] = tag;
@@ -449,6 +535,7 @@ static void ui_begin_text_screen(const char* title, const char* controls) {
   }
 
   memset(ui_row_tag, 0xFF, sizeof(ui_row_tag));
+  memset(ui_row_value_col, 0xFF, sizeof(ui_row_value_col));
 
   ui_term_clear();
   ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
@@ -480,7 +567,9 @@ void ui_render_text_screen(const char* title, const char* controls,
   ui_begin_text_screen(title, controls);
 
   if (controls) {
-    ui_render_cached_text_row(2, controls, UI_TEXT_ROW_STYLE_CONTROL);
+    char controls_buf[40];
+    snprintf(controls_buf, sizeof(controls_buf), "KEYS  : %s", controls);
+    ui_render_cached_text_row(2, controls_buf, UI_TEXT_ROW_STYLE_CONTROL);
   } else {
     ui_render_cached_text_row(2, "", UI_TEXT_ROW_STYLE_BLANK);
   }

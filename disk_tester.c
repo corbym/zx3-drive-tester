@@ -369,8 +369,8 @@ static int selected_test_prompt_mode(int interactive) {
 
 static const char *single_shot_test_controls(int interactive) {
     return selected_test_prompt_mode(interactive)
-               ? "KEYS  : ENTER/ESC MENU"
-               : "KEYS  : AUTO RETURN MENU";
+               ? "ENTER/ESC MENU"
+               : "AUTO RETURN MENU";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -604,7 +604,7 @@ static void test_seek_interactive(void) {
 
     last_test_failed = 0;
     interactive_seek_card_init(&interactive_seek_card,
-                               "KEYS  : K UP  J DOWN  Q EXIT");
+                               "K UP  J DOWN  Q EXIT");
 
     plus3_motor_on();
 
