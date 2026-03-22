@@ -13,11 +13,13 @@ A low-level ZX Spectrum +3 floppy drive test utility written in C and Z80 assemb
 - Motor control: `set_motor_on()`, `set_motor_off()` with atomic read-modify-write to port `0x1FFD`
 - Critical: preserves ROM paging bits when writing to `0x1FFD` (only touch bit 3)
 
-**uPD765A FDC Communication** (in `disk_tester.c`)
+**uPD765A FDC Communication** (`disk_operations.c` + `disk_tester.c`)
+- Low-level FDC commands (recalibrate, seek, read ID, read data, sense drive status) live in `disk_operations.c`; higher-level test sequences and loops live in `disk_tester.c`
 - Direct port-based protocol via `0x2FFD` (MSR status) and `0x3FFD` (data register)
 - MSR bit polling: `MSR_RQM` (0x80) for request-to-master, `MSR_DIO` (0x40) for CPU→FDC direction
 - Timing-sensitive: command/result bytes require `FDC_CMD_BYTE_GAP_UNITS` pacing; execution-phase data does not
 - The +3's lack of TC (Terminal Count) hardware line means successful READ DATA completes with `ST0.IC=01` + `ST1.EN=1` (not clean zero); code treats this as success when no other error bits set
+- **Return convention in `disk_operations.c`**: functions return `1` for success and `0` for failure — the inverse of the standard C errno convention. Do not confuse with standard `0 = success` idiom.
 
 **Menu System** (`menu_system.c/h`)
 - Direct keyboard scanning via ZX Spectrum keyboard matrix ports
@@ -31,6 +33,8 @@ A low-level ZX Spectrum +3 floppy drive test utility written in C and Z80 assemb
 - Character ROM font copied to RAM on startup before ROM paging changes (preserves correctness under DivMMC)
 - Test card abstraction: structs contain title, controls text, and result lines; rendering handles styling via attribute bytes
 - Build flag: `COMPACT_UI=1` uses denser font (default is larger, required for CI OCR tests)
+- **Row dirty cache**: `ui_row_tag[24]` holds a per-row DJB2 checksum combined with the row style. `ui_render_cached_text_row` skips the expensive pixel+attr write when the tag matches. Always invalidate with `ui_reset_text_screen_cache()` before switching away from the text-screen path.
+- **Label/value separation convention**: row headers (`"RESULT: "`, `"STATUS: "`, `"TRACK : "`, etc.) must never be embedded inside value strings. Use `test_card_set_labeled_value(card, row, LABEL, value, fallback)` for body rows. For the result row at the bottom, call `test_card_render(card, "RESULT: ", value)` — the label is passed as a separate argument and composed into a stack buffer at render time. This keeps each prefix string in the binary exactly once, reducing ROM pressure on the Z80.
 
 **Main Test Loop** (`disk_tester.c`)
 - Holds state for all 7 tests: result codes, diagnostic bytes from FDC
@@ -64,9 +68,7 @@ Uses `z88dk`: `zcc +zx -clib=new` for TAP; `-subtype=plus3` for DSK.
 
 ```bash
 ./run_tests.sh                       # Full suite: requires ZEsarUX + Go
-```
-
-**Mandatory pre-test step**: always run a fresh build before any test run, including `go test ./tests -run TestTapCodeSizeBudget`.
+```**Mandatory pre-test step**: always run a fresh build before any test run, including `go test ./tests -run TestTapCodeSizeBudget`.
 - Why: budget/smoke tests read generated TAP/DSK/map outputs; without a rebuild they can evaluate stale files from an older code state.
 - Safe sequence:
   1. `./build.sh`
@@ -122,6 +124,7 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 ## Files You'll Likely Edit
 
 - **`disk_tester.c`** – Main test logic, FDC command sequences, timing loops
+- **`disk_operations.c`** – Low-level uPD765A command implementations (recal, seek, read ID, read data)
 - **`menu_system.c`** – Keyboard matrix scanning, key latching (if adding input)
 - **`ui.c`** – Screen rendering (if changing layout or adding test results display)
 - **`intstate.asm`** – Motor control, I/O atomicity (rarely touched; motor bit must always preserve other paging)
@@ -133,6 +136,12 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 - **Emulator OCR** (`tests/smoke_emulator_test.go`): `c.OCR()` returns raw Tesseract text; use for validating UI state
 - **ZRCP direct**: port 9999 TCP, send `send-keys-ascii 25 65` for key 'A' (25 ms hold, ASCII code)
 - **Disk image inspection**: `.dsk` files are raw CP/M disk images; use `image` tools to extract sectors if needed
+- **Emulator `connect: connection refused` failures**: if a mid-suite emulator test times out or crashes, all subsequent tests in the same run will fail with this error. It is an infrastructure issue (emulator process died), not a code correctness problem. `TestTapCodeSizeBudget`, `TestMapHeapStackHeadroom`, and `TestMenuAppearsAfterTapLoad` are the most reliable correctness signals — they do not depend on emulator continuity.
+- **Add a new FDC command**: implement it in `disk_operations.c` following the existing pattern (`fdc_wait_rqm` + `fdc_write`/`fdc_read`); remember return 1=success, 0=failure. Wire it into the test sequence in `disk_tester.c`.
+
+## Optimizations
+- Always refer to https://www.z88dk.org/wiki/doku.php?id=optimization for z88dk optimization tips. 
+- Run the memory_budget_regression_test.go test to see how much memory is used by the program. Optimize the code to reduce memory usage if required. 
 
 ## Common Tasks
 

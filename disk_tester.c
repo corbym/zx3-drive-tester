@@ -31,6 +31,7 @@
 #include <sys/ioctl.h>
 
 #include "menu_system.h"
+#include "test_cards.h"
 #include "ui.h"
 
 #include "disk_operations.h"
@@ -95,17 +96,16 @@ static unsigned char last_test_failed;
 #endif
 
 static unsigned char report_status_code;
-static unsigned int run_all_ready_delay_ms = RUN_ALL_READY_DELAY_MS;
-static unsigned int run_all_running_delay_ms = RUN_ALL_RUNNING_DELAY_MS;
-static unsigned int run_all_result_delay_ms = RUN_ALL_RESULT_DELAY_MS;
 
-static void configure_run_all_timing(void) {
-    if (RUN_ALL_UI_PACE_HUMAN) {
-        run_all_ready_delay_ms = 250U;
-        run_all_running_delay_ms = 250U;
-        run_all_result_delay_ms = 500U;
-    }
-}
+#if RUN_ALL_UI_PACE_HUMAN
+#define RUN_ALL_READY_DELAY_EFFECTIVE_MS 250U
+#define RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS 250U
+#define RUN_ALL_RESULT_DELAY_EFFECTIVE_MS 500U
+#else
+#define RUN_ALL_READY_DELAY_EFFECTIVE_MS RUN_ALL_READY_DELAY_MS
+#define RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS RUN_ALL_RUNNING_DELAY_MS
+#define RUN_ALL_RESULT_DELAY_EFFECTIVE_MS RUN_ALL_RESULT_DELAY_MS
+#endif
 
 static void disable_terminal_auto_pause(void) {
     /* Avoid hidden key waits when output scrolls beyond one screen. */
@@ -1161,11 +1161,11 @@ static void run_all_tests(unsigned char human_mode) {
 
     set_report_status(REPORT_STATUS_READY);
     ui_render_report_card();
-    if (human_mode) delay_ms_pump_keys(run_all_ready_delay_ms);
+    if (human_mode) delay_ms_pump_keys(RUN_ALL_READY_DELAY_EFFECTIVE_MS);
 
     for (unsigned char i = 0; i < RUN_ALL_TEST_COUNT; i++) {
         set_report_status(REPORT_STATUS_RUNNING);
-        if (human_mode) delay_ms_pump_keys(run_all_running_delay_ms);
+        if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS);
         run_all_test_list[i](0);
         set_report_status(REPORT_STATUS_COMPLETE);
         if (i == RUN_ALL_TEST_COUNT - 1U) {
@@ -1174,7 +1174,7 @@ static void run_all_tests(unsigned char human_mode) {
         else {
             ui_render_report_card();
         }
-        if (human_mode) delay_ms_pump_keys(run_all_result_delay_ms);
+        if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_EFFECTIVE_MS);
     }
 
     last_test_failed = (unsigned char) (pass_count() < pass_count_ran());
@@ -1196,7 +1196,6 @@ int main(void) {
 
     /* Initialize motor and paging to safe defaults. */
     plus3_motor_off();
-    configure_run_all_timing();
 
     memset(&results, 0, sizeof(results));
     reset_report_progress();

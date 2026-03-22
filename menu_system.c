@@ -219,17 +219,13 @@ int read_menu_key_blocking(void) {
 static void menu_apply_row_visual(unsigned char index, unsigned char selected) {
     const MenuItem *items = menu_items();
     unsigned char count = menu_item_count();
-    unsigned char row;
     unsigned char col;
-    unsigned char paper;
 
     if (index >= count) return;
 
-    row = (unsigned char)(3U + index);
-    paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
-    for (col = 0; col < 32U; col++) {
-        ui_attr_set_cell(row, col, ZX_COLOUR_BLACK, paper, 1);
-    }
+    unsigned char row = (unsigned char) (3U + index);
+    unsigned char paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
+    ui_attr_set_run(row, 0, 32, ZX_COLOUR_BLACK, paper, 1);
     if (items[index].hot_col < 31U) {
         ui_attr_set_cell(row, (unsigned char)(items[index].hot_col + 1U),
                          ZX_COLOUR_BLUE, paper, 1);
@@ -278,11 +274,9 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
 
     /* Reapply +3-style colour layout on top of terminal text output. */
     ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
-    for (col = 0; col < 32; col++) {
-        ui_attr_set_cell(0, col,  ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
-        ui_attr_set_cell(15, col, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
-        ui_attr_set_cell(16, col, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
-    }
+    ui_attr_set_run(0, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
+    ui_attr_set_run(15, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run(16, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
     for (col = 0; col < 8; col++) {
         ui_attr_set_cell(0, (unsigned char)(24 + col),
                          STRIPE_INK[col], STRIPE_PAPER[col], 1);
