@@ -31,6 +31,7 @@
 #include <sys/ioctl.h>
 
 #include "menu_system.h"
+#include "shared_strings.h"
 #include "test_cards.h"
 #include "ui.h"
 
@@ -365,8 +366,8 @@ static int selected_test_prompt_mode(int interactive) {
 
 static const char *single_shot_test_controls(int interactive) {
     return selected_test_prompt_mode(interactive)
-               ? "ENTER/ESC MENU"
-               : "AUTO RETURN MENU";
+               ? zx3_ctrl_enter_esc_menu
+               : zx3_ctrl_auto_return_menu;
 }
 
 /* -------------------------------------------------------------------------- */

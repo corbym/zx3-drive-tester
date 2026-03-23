@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "shared_strings.h"
 
 #include <string.h>
 #include <sys/ioctl.h>
@@ -338,15 +339,15 @@ static unsigned char ui_line_value_col(const char* text) {
 
 static unsigned char ui_line_is_alert(const char* text) {
   if (!text) return 0;
-  return (unsigned char)(strstr(text, "FAIL") != 0 || strstr(text, "NO REV") != 0 ||
-                     strstr(text, "NOT READY") != 0 ||
-                     strstr(text, "INVALID") != 0 || strstr(text, "BAD") != 0 ||
-                     strstr(text, "N/A") != 0 || strstr(text, "TIMEOUT") != 0 ||
-                     strstr(text, "CHECK MEDIA") != 0 ||
-                     strstr(text, "OUT-OF-RANGE") != 0 ||
-                     strstr(text, "SKIPPED") != 0 ||
-                     strstr(text, "STOPPED") != 0 ||
-                     strstr(text, "ERROR") != 0);
+  return (unsigned char)(strstr(text, zx3_str_fail) != 0 || strstr(text, "NO REV") != 0 ||
+                     strstr(text, zx3_str_not_ready) != 0 ||
+                     strstr(text, zx3_str_invalid) != 0 || strstr(text, "BAD") != 0 ||
+                     strstr(text, "N/A") != 0 || strstr(text, zx3_str_timeout) != 0 ||
+                     strstr(text, zx3_str_check_media) != 0 ||
+                     strstr(text, zx3_str_out_of_range) != 0 ||
+                     strstr(text, zx3_str_skipped) != 0 ||
+                     strstr(text, zx3_str_stopped) != 0 ||
+                     strstr(text, zx3_str_error) != 0);
 }
 
 /* Colour N consecutive attribute cells starting at (row, start_col). */

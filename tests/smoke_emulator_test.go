@@ -313,7 +313,7 @@ func TestScreenCaptureStages(t *testing.T) {
 		actual := filepath.Join(screenDir, filename)
 		approved := filepath.Join(approvedDir, filename)
 		approvedBytes, err := os.ReadFile(approved)
-		if err != nil {
+		if err != nil && !updateApproved {
 			t.Fatalf("approved screenshot missing or unreadable: %s (set ZX3_UPDATE_APPROVED=1 to refresh baselines)", approved)
 		}
 
@@ -381,11 +381,16 @@ func TestScreenCaptureStages(t *testing.T) {
 		name        string
 		captureFile string
 		key         byte
+		exitKey     byte
+		exitKey2    byte
 		waitFor     []string
 		waitTimeout time.Duration
+		exitWaitFor []string
+		exitTimeout time.Duration
 		settleDelay time.Duration
 		nonBlank    bool
 		enterToMenu bool
+		loadDSK     bool
 	}
 
 	stages := []screenStage{
@@ -429,6 +434,24 @@ func TestScreenCaptureStages(t *testing.T) {
 			nonBlank:    true,
 		},
 		{
+			// Load DSK so the loop reads real sector data and the hex
+			// preview panel is populated.  The DSK stays loaded for the
+			// subsequent run-all stage.
+			name:        "read data loop",
+			captureFile: "07_read_data_loop_hex_preview.bmp",
+			loadDSK:     true,
+			key:         'D',
+			waitFor:     []string{"READ TRACK DATA LOOP", "DATA PREVIEW"},
+			waitTimeout: 30 * time.Second,
+			settleDelay: 3 * time.Second,
+			exitKey:     'X',
+			exitKey2:    13, // dismiss "press any key" after loop stops
+			exitWaitFor: []string{"ZX +3 DISK TESTER", "ENTER: SELECT"},
+			exitTimeout: 20 * time.Second,
+			nonBlank:    true,
+		},
+		{
+			// DSK already loaded from the previous stage.
 			name:        "run-all complete",
 			captureFile: "06_run_all_complete.bmp",
 			key:         'A',
@@ -439,6 +462,18 @@ func TestScreenCaptureStages(t *testing.T) {
 	}
 
 	for _, stage := range stages {
+		if stage.loadDSK {
+			if err := c.Smartload(dskPath); err != nil {
+				t.Fatalf("failed to smartload DSK for %s: %v", stage.name, err)
+			}
+			if err := c.HardReset(); err != nil {
+				t.Fatalf("failed hard-reset after DSK smartload for %s: %v", stage.name, err)
+			}
+			if _, err := c.WaitForOCR(20*time.Second, "ZX +3 DISK TESTER", "ENTER: SELECT"); err != nil {
+				t.Fatalf("timed out waiting for menu after DSK load for %s: %v", stage.name, err)
+			}
+		}
+
 		if stage.enterToMenu {
 			pressEnterUntilMenu(stage.waitTimeout)
 		}
@@ -460,6 +495,23 @@ func TestScreenCaptureStages(t *testing.T) {
 		}
 
 		captureChecked(stage.captureFile, stage.nonBlank)
+
+		if stage.exitKey != 0 {
+			if err := c.SendKey(stage.exitKey); err != nil {
+				t.Fatalf("failed to send exit key %q for %s: %v", stage.exitKey, stage.name, err)
+			}
+			if stage.exitKey2 != 0 {
+				time.Sleep(1 * time.Second)
+				if err := c.SendKey(stage.exitKey2); err != nil {
+					t.Fatalf("failed to send exit key2 %d for %s: %v", stage.exitKey2, stage.name, err)
+				}
+			}
+			if len(stage.exitWaitFor) > 0 {
+				if _, err := c.WaitForOCR(stage.exitTimeout, stage.exitWaitFor...); err != nil {
+					t.Fatalf("timed out waiting to exit %s: %v", stage.name, err)
+				}
+			}
+		}
 	}
 }
 

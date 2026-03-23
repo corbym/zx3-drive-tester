@@ -1,4 +1,5 @@
 #include "test_cards.h"
+#include "shared_strings.h"
 #include "ui.h"
 
 #include <string.h>
@@ -23,7 +24,7 @@
 #define LABEL_STS     "STS   : "
 #define LABEL_CHRN    "CHRN  : "
 #define LABEL_PCN     "PCN   : "
-#define LABEL_RESULT  "RESULT: "
+#define LABEL_RESULT  zx3_label_result
 
 /* Row value string constants — #define lets the optimiser share literals. */
 #define S_READY         "READY"
@@ -114,7 +115,7 @@ static const char *test_card_result_text(TestCardResult result) {
         case TEST_CARD_RESULT_FAIL: return S_FAIL;
         case TEST_CARD_RESULT_COMPLETE: return S_COMPLETE;
         case TEST_CARD_RESULT_STOPPED: return S_STOPPED;
-        case TEST_CARD_RESULT_OUT_OF_RANGE: return "OUT-OF-RANGE";
+        case TEST_CARD_RESULT_OUT_OF_RANGE: return zx3_str_out_of_range;
         default: return S_IDLE;
     }
 }
@@ -137,8 +138,8 @@ static const char *recal_seek_status_text(RecalSeekStatus status) {
         case RECAL_SEEK_STATUS_PENDING: return "PENDING";
         case RECAL_SEEK_STATUS_PASS: return S_PASS;
         case RECAL_SEEK_STATUS_FAIL: return S_FAIL;
-        case RECAL_SEEK_STATUS_SKIPPED: return "SKIPPED";
-        default: return "---";
+        case RECAL_SEEK_STATUS_SKIPPED: return zx3_str_skipped;
+        default: return zx3_str_dash3;
     }
 }
 
@@ -443,7 +444,8 @@ void rpm_loop_card_set_rpm(RpmLoopCard *card, unsigned int rpm,
                  LABEL_RPM, rpm);
     }
     else {
-        test_card_set_labeled_value(&card->base, 0U, LABEL_RPM, "---", "---");
+        test_card_set_labeled_value(&card->base, 0U, LABEL_RPM,
+                                    zx3_str_dash3, zx3_str_dash3);
     }
 }
 
@@ -516,7 +518,8 @@ void motor_drive_card_init(MotorDriveCard *card, const char *controls) {
 }
 
 void motor_drive_card_set_unknown(MotorDriveCard *card) {
-    test_card_set_labeled_value(&card->base, 1U, LABEL_ST3, "---", "---");
+    test_card_set_labeled_value(&card->base, 1U, LABEL_ST3,
+                                zx3_str_dash3, zx3_str_dash3);
     card_fill_st3_fields(&card->base, 2U, 0, 0);
 }
 
@@ -533,7 +536,7 @@ void motor_drive_card_set_drive_status(MotorDriveCard *card,
                                        unsigned char st3) {
     if (!have_st3) {
         test_card_set_labeled_value(&card->base, 1U, LABEL_ST3,
-                                    "TIMEOUT", "TIMEOUT");
+                                    zx3_str_timeout, zx3_str_timeout);
     }
     else {
         snprintf(card->base.text[1], TEST_CARD_LINE_LEN, "%s0x%02X",
@@ -562,7 +565,8 @@ void read_id_probe_card_init(ReadIdProbeCard *card, const char *controls) {
 }
 
 void read_id_probe_card_set_unknown(ReadIdProbeCard *card) {
-    test_card_set_labeled_value(&card->base, 0U, LABEL_ST3, "---", "---");
+    test_card_set_labeled_value(&card->base, 0U, LABEL_ST3,
+                                zx3_str_dash3, zx3_str_dash3);
     card_fill_st3_fields(&card->base, 1U, 0, 0);
 }
 
@@ -577,7 +581,7 @@ void read_id_probe_card_set_drive_status(ReadIdProbeCard *card,
                                          unsigned char st3) {
     if (!have_st3) {
         test_card_set_labeled_value(&card->base, 0U, LABEL_ST3,
-                                    "TIMEOUT", "TIMEOUT");
+                                    zx3_str_timeout, zx3_str_timeout);
     }
     else {
         snprintf(card->base.text[0], TEST_CARD_LINE_LEN, "%s0x%02X",
@@ -619,10 +623,14 @@ void recal_seek_card_init(RecalSeekCard *card, const char *controls) {
 }
 
 void recal_seek_card_set_unknown(RecalSeekCard *card) {
-    test_card_set_labeled_value(&card->base, 0U, LABEL_READY, "---", "---");
-    test_card_set_labeled_value(&card->base, 1U, LABEL_RECAL, "---", "---");
-    test_card_set_labeled_value(&card->base, 2U, LABEL_SEEK, "---", "---");
-    test_card_set_labeled_value(&card->base, 3U, LABEL_DETAIL, "---", "---");
+    test_card_set_labeled_value(&card->base, 0U, LABEL_READY,
+                                zx3_str_dash3, zx3_str_dash3);
+    test_card_set_labeled_value(&card->base, 1U, LABEL_RECAL,
+                                zx3_str_dash3, zx3_str_dash3);
+    test_card_set_labeled_value(&card->base, 2U, LABEL_SEEK,
+                                zx3_str_dash3, zx3_str_dash3);
+    test_card_set_labeled_value(&card->base, 3U, LABEL_DETAIL,
+                                zx3_str_dash3, zx3_str_dash3);
 }
 
 void recal_seek_card_set_ready_yes(RecalSeekCard *card) {
@@ -638,19 +646,19 @@ void recal_seek_card_set_ready_fail_st3(RecalSeekCard *card,
 void recal_seek_card_set_recal_status(RecalSeekCard *card,
                                       RecalSeekStatus status) {
     test_card_set_labeled_value(&card->base, 1U, LABEL_RECAL,
-                                recal_seek_status_text(status), "---");
+                                recal_seek_status_text(status), zx3_str_dash3);
 }
 
 void recal_seek_card_set_seek_status(RecalSeekCard *card,
                                      RecalSeekStatus status) {
     test_card_set_labeled_value(&card->base, 2U, LABEL_SEEK,
-                                recal_seek_status_text(status), "---");
+                                recal_seek_status_text(status), zx3_str_dash3);
 }
 
 void recal_seek_card_set_detail_status(RecalSeekCard *card,
                                        const char *status_value) {
     test_card_set_labeled_value(&card->base, 3U, LABEL_DETAIL,
-                                status_value, "---");
+                                status_value, zx3_str_dash3);
 }
 
 void recal_seek_card_set_detail_st0_pcn(RecalSeekCard *card,
@@ -734,7 +742,7 @@ void read_id_card_set_chrn_status(ReadIdCard *card,
 void read_id_card_set_detail_status(ReadIdCard *card,
                                     const char *status_value) {
     test_card_set_labeled_value(&card->base, 3U, LABEL_DETAIL,
-                                status_value, "---");
+                                status_value, zx3_str_dash3);
 }
 
 void read_id_card_set_detail_failure(ReadIdCard *card, const char *reason) {
@@ -780,7 +788,7 @@ void interactive_seek_card_set_last_st0(InteractiveSeekCard *card,
 void interactive_seek_card_set_last_status(InteractiveSeekCard *card,
                                            const char *status_value) {
     test_card_set_labeled_value(&card->base, 1U, LABEL_LAST,
-                                status_value, "---");
+                                status_value, zx3_str_dash3);
 }
 
 void interactive_seek_card_set_pcn(InteractiveSeekCard *card,
