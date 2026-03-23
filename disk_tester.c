@@ -166,6 +166,15 @@ static unsigned char seek_completion_ok(unsigned char st0) {
     return (unsigned char) (((st0 & 0x20U) != 0U) && ((st0 & 0xC0U) == 0U));
 }
 
+/* Run RECAL + wait for interrupt + validate SE/IC completion semantics. */
+static unsigned char recalibrate_track0_strict(FdcSeekResult *result) {
+    result->st0 = 0;
+    result->pcn = 0;
+    if (!cmd_recalibrate(FDC_DRIVE)) return 0;
+    if (!wait_seek_complete(FDC_DRIVE, result)) return 0;
+    return seek_completion_ok(result->st0);
+}
+
 static void ui_render_report_card(void) {
     const unsigned char total = pass_count();
     ReportCardState last_state;
@@ -420,8 +429,15 @@ static void test_read_id_probe(const char interactive) {
     unsigned char show_live_card = show_selected_test_cards();
     ReadIdProbeCard read_id_probe_card;
 
-    init_fdc_seek_result(&seek_result);
-    init_fdc_result(&rid_result);
+    seek_result.st0 = 0;
+    seek_result.pcn = 0;
+    rid_result.status.st0 = 0;
+    rid_result.status.st1 = 0;
+    rid_result.status.st2 = 0;
+    rid_result.chrn.c = 0;
+    rid_result.chrn.h = 0;
+    rid_result.chrn.r = 0;
+    rid_result.chrn.n = 0;
 
     last_test_failed = 0;
     read_id_probe_card_init(&read_id_probe_card,
@@ -483,7 +499,7 @@ static void test_read_id_probe(const char interactive) {
                          : TEST_CARD_RESULT_FAIL);
 }
 
-static void test_recal_seek_track2(const char interactive) {
+static void test_recal_seek_track2(int interactive) {
     unsigned char st3 = 0;
     unsigned char track_target = 2;
     unsigned char recal_ok = 0;
@@ -530,8 +546,8 @@ static void test_recal_seek_track2(const char interactive) {
         set_detail_recal_cmd_fail(&recal_seek_card);
         results.recalibrate_pass = 0;
         results.seek_pass = 0;
-        plus3_motor_off();
         last_test_failed = 1;
+        plus3_motor_off();
         render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
         return;
     }
@@ -541,8 +557,8 @@ static void test_recal_seek_track2(const char interactive) {
         set_detail_st0_pcn(&recal_seek_card, seek_result.st0, seek_result.pcn);
         results.recalibrate_pass = 0;
         results.seek_pass = 0;
-        plus3_motor_off();
         last_test_failed = 1;
+        plus3_motor_off();
         render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
         return;
     }
@@ -561,8 +577,8 @@ static void test_recal_seek_track2(const char interactive) {
         set_detail_seek_cmd_fail(&recal_seek_card);
         results.recalibrate_pass = recal_ok;
         results.seek_pass = 0;
-        plus3_motor_off();
         last_test_failed = 1;
+        plus3_motor_off();
         render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
         return;
     }
@@ -572,8 +588,8 @@ static void test_recal_seek_track2(const char interactive) {
         set_detail_st0_pcn(&recal_seek_card, seek_result.st0, seek_result.pcn);
         results.recalibrate_pass = recal_ok;
         results.seek_pass = 0;
-        plus3_motor_off();
         last_test_failed = 1;
+        plus3_motor_off();
         render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
         return;
     }
@@ -601,12 +617,17 @@ static void test_recal_seek_track2(const char interactive) {
                       : TEST_CARD_RESULT_FAIL);
 }
 
+static void interactive_seek_fail(const InteractiveSeekCard *card) {
+    plus3_motor_off();
+    last_test_failed = 1;
+    render_interactive_seek(card, TEST_CARD_RESULT_FAIL);
+}
+
 static void test_seek_interactive(void) {
     FdcSeekResult seek_result;
     unsigned char st3 = 0;
     unsigned char target = 0;
     InteractiveSeekCard interactive_seek_card;
-
     seek_result.st0 = 0;
     seek_result.pcn = 0;
 
@@ -620,12 +641,16 @@ static void test_seek_interactive(void) {
         set_interactive_seek_ready_fail_st3(&interactive_seek_card, st3);
         set_last_no_seek(&interactive_seek_card);
         set_pcn(&interactive_seek_card, 0U);
-        plus3_motor_off();
-        last_test_failed = 1;
-        render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
+        interactive_seek_fail(&interactive_seek_card);
         return;
     }
-
+    /* One-time RECAL before interactive SEEK loop to establish known PCN. */
+    if (!recalibrate_track0_strict(&seek_result)) {
+        set_last_st0(&interactive_seek_card, seek_result.st0);
+        set_pcn(&interactive_seek_card, seek_result.pcn);
+        interactive_seek_fail(&interactive_seek_card);
+        return;
+    }
     for (;;) {
         set_interactive_seek_track(&interactive_seek_card, target);
         set_last_st0(&interactive_seek_card, seek_result.st0);
@@ -659,9 +684,7 @@ static void test_seek_interactive(void) {
             set_interactive_seek_track(&interactive_seek_card, target);
             set_last_seek_cmd_fail(&interactive_seek_card);
             set_pcn(&interactive_seek_card, seek_result.pcn);
-            plus3_motor_off();
-            last_test_failed = 1;
-            render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
+            interactive_seek_fail(&interactive_seek_card);
             return;
         }
 
@@ -669,9 +692,7 @@ static void test_seek_interactive(void) {
             set_interactive_seek_track(&interactive_seek_card, target);
             set_last_wait_timeout(&interactive_seek_card);
             set_pcn(&interactive_seek_card, seek_result.pcn);
-            plus3_motor_off();
-            last_test_failed = 1;
-            render_interactive_seek(&interactive_seek_card, TEST_CARD_RESULT_FAIL);
+            interactive_seek_fail(&interactive_seek_card);
             return;
         }
     }
@@ -710,10 +731,7 @@ static void test_read_id(int interactive) {
     /* Try to get to track 0 first — abort if RECAL fails */
     {
         FdcSeekResult recal_result;
-        recal_result.st0 = 0;
-        if (!cmd_recalibrate(FDC_DRIVE) ||
-            !wait_seek_complete(FDC_DRIVE, &recal_result) ||
-            !seek_completion_ok(recal_result.st0)) {
+        if (!recalibrate_track0_strict(&recal_result)) {
             set_detail_failure(&read_id_card, "RECAL FAILED");
             results.read_id_pass = 0;
             last_test_failed = 1;
@@ -973,10 +991,7 @@ static void test_read_track_data_loop(void) {
         if (seek_required) {
             if (recal_required) {
                 FdcSeekResult recal_result;
-                recal_result.st0 = 0;
-                if (!cmd_recalibrate(FDC_DRIVE) ||
-                    !wait_seek_complete(FDC_DRIVE, &recal_result) ||
-                    !seek_completion_ok(recal_result.st0)) {
+                if (!recalibrate_track0_strict(&recal_result)) {
                     fail_count++;
                     render_track_loop_seek_fail(current_track, pass_count,
                                                 fail_count, recal_result.st0);
@@ -1071,6 +1086,7 @@ static void test_rpm_checker(void) {
     unsigned char seen_other = 0;
     unsigned char st3 = 0;
     unsigned char exit_now = 0;
+    unsigned char recal_pending = 1;
     unsigned short loop_start_tick = 0;
 
     seek_result.st0 = 0;
@@ -1080,15 +1096,6 @@ static void test_rpm_checker(void) {
 
     plus3_motor_on();
     loop_start_tick = frame_ticks();
-
-    /* Best-effort initial RECAL to establish PCN=0 before per-iteration cmd_seek */
-    {
-        FdcSeekResult recal_result;
-        if (wait_drive_ready(FDC_DRIVE, 0, &st3) &&
-            cmd_recalibrate(FDC_DRIVE)) {
-            wait_seek_complete(FDC_DRIVE, &recal_result);
-        }
-    }
 
     while (!(rpm_exit_armed(loop_start_tick) && loop_exit_requested())) {
 #if HEADLESS_ROM_FONT
@@ -1100,6 +1107,17 @@ static void test_rpm_checker(void) {
             render_rpm_loop_drive_not_ready(rpm, pass_count, fail_count);
             delay_ms(RPM_FAIL_DELAY_MS);
             continue;
+        }
+
+        /* Run RECAL once; if it fails, retry next loop until one success. */
+        if (recal_pending) {
+            if (!recalibrate_track0_strict(&seek_result)) {
+                fail_count++;
+                render_rpm_loop_seek_fail(rpm, pass_count, fail_count);
+                delay_ms(RPM_FAIL_DELAY_MS);
+                continue;
+            }
+            recal_pending = 0;
         }
 
         if (!cmd_seek(FDC_DRIVE, 0, 0) ||
@@ -1182,8 +1200,6 @@ static void test_rpm_checker(void) {
 /* UI                                                                         */
 /* -------------------------------------------------------------------------- */
 
-static void print_results(void) { ui_render_report_card(); }
-
 typedef void (*TestFunc)(int interactive);
 
 static const TestFunc run_all_test_list[] = {
@@ -1211,12 +1227,7 @@ static void run_all_tests(unsigned char human_mode) {
         if (human_mode) delay_ms_pump_keys(RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS);
         run_all_test_list[i](0);
         set_report_status(REPORT_STATUS_COMPLETE);
-        if (i == RUN_ALL_TEST_COUNT - 1U) {
-            print_results();
-        }
-        else {
-            ui_render_report_card();
-        }
+        ui_render_report_card();
         if (human_mode) delay_ms_pump_keys(RUN_ALL_RESULT_DELAY_EFFECTIVE_MS);
     }
 
@@ -1314,7 +1325,7 @@ int main(void) {
                 menu_dirty = 1;
                 break;
             case 'R':
-                print_results();
+                ui_render_report_card();
                 press_any_key(1);
                 menu_dirty = 1;
                 break;

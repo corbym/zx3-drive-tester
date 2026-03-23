@@ -608,8 +608,8 @@ unsigned char wait_seek_complete(unsigned char drive, FdcSeekResult *out_result)
  * to a short human-readable string, suitable for display on a test card.
  *
  * Bits are checked in priority order (ST1 before ST2; most diagnostic first).
- * If no specific error bit is recognized, constructs a fallback hex string of
- * the form "S1=XX S2=XX" (e.g., "S1=04 S2=10") to expose unknown error states.
+ * If no specific error bit is recognized, returns a compact 4-hex fallback
+ * code "AABB" where AA=ST1 and BB=ST2 (e.g. "0410").
  *
  * ST1 bits checked (uPD765A):
  *   0x01 MA  — Missing ID address mark
@@ -628,7 +628,7 @@ unsigned char wait_seek_complete(unsigned char drive, FdcSeekResult *out_result)
  * Reference: https://problemkaputt.de/zxdocs.htm#spectrumdiscspectrum3disccontrollernecupd765
  */
 const char *read_id_failure_reason(unsigned char st1, unsigned char st2) {
-    static char fallback[12];
+    static char fallback[5];
     static const char hex[] = "0123456789ABCDEF";
     if (st1 & 0x01) return "Missing ID address mark";
     if (st1 & 0x04) return "No data";
@@ -641,17 +641,10 @@ const char *read_id_failure_reason(unsigned char st1, unsigned char st2) {
     if (st2 & 0x20) return "CRC in data field";
     if (st2 & 0x40) return "Control mark";
 
-    fallback[0] = 'S';
-    fallback[1] = '1';
-    fallback[2] = '=';
-    fallback[3] = hex[st1 >> 4 & 0x0F];
-    fallback[4] = hex[st1 & 0x0F];
-    fallback[5] = ' ';
-    fallback[6] = 'S';
-    fallback[7] = '2';
-    fallback[8] = '=';
-    fallback[9] = hex[(st2 >> 4) & 0x0F];
-    fallback[10] = hex[st2 & 0x0F];
-    fallback[11] = '\0';
+    fallback[0] = hex[(st1 >> 4) & 0x0F];
+    fallback[1] = hex[st1 & 0x0F];
+    fallback[2] = hex[(st2 >> 4) & 0x0F];
+    fallback[3] = hex[st2 & 0x0F];
+    fallback[4] = '\0';
     return fallback;
 }
