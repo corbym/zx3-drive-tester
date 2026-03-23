@@ -379,6 +379,7 @@ static const char *single_shot_test_controls(int interactive) {
 
 static void test_motor_and_drive_status(const char interactive) {
     unsigned char status_3 = 0;
+    unsigned char have_st3 = 0;
     unsigned char show_live_card = show_selected_test_cards();
     MotorDriveCard motor_drive_card;
 
@@ -397,7 +398,7 @@ static void test_motor_and_drive_status(const char interactive) {
 
     plus3_motor_on();
 
-    unsigned char have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &status_3);
+    have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &status_3);
     set_motor_drive_status(&motor_drive_card, have_st3, status_3);
     results.sense_drive_pass = have_st3 ? 1U : 0U;
 
@@ -419,8 +420,8 @@ static void test_read_id_probe(const char interactive) {
     unsigned char show_live_card = show_selected_test_cards();
     ReadIdProbeCard read_id_probe_card;
 
-    seek_result.st0 = 0;
-    seek_result.pcn = 0;
+    init_fdc_seek_result(&seek_result);
+    init_fdc_result(&rid_result);
 
     last_test_failed = 0;
     read_id_probe_card_init(&read_id_probe_card,
@@ -462,20 +463,27 @@ static void test_read_id_probe(const char interactive) {
     last_test_failed = (unsigned char) (rid_ok == 0);
     plus3_motor_off();
     if (rid_ok) {
-        set_id_chrn(&read_id_probe_card, rid_result.chrn.c, rid_result.chrn.h,
-                    rid_result.chrn.r, rid_result.chrn.n);
+        set_id_chrn(&read_id_probe_card,
+                    rid_result.chrn.c,
+                    rid_result.chrn.h,
+                    rid_result.chrn.r,
+                    rid_result.chrn.n
+        );
     }
     else {
         set_id_failure(&read_id_probe_card,
-                       read_id_failure_reason(rid_result.status.st1,
-                           rid_result.status.st2));
+                       read_id_failure_reason(
+                           rid_result.status.st1,
+                           rid_result.status.st2
+                       )
+        );
     }
     render_read_id_probe(&read_id_probe_card, rid_ok
                          ? TEST_CARD_RESULT_PASS
                          : TEST_CARD_RESULT_FAIL);
 }
 
-static void test_recal_seek_track2(int interactive) {
+static void test_recal_seek_track2(const char interactive) {
     unsigned char st3 = 0;
     unsigned char track_target = 2;
     unsigned char recal_ok = 0;

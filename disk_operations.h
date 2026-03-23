@@ -55,6 +55,20 @@ typedef struct {
     unsigned char pcn;
 } FdcSeekResult;
 
+static void init_fdc_result(FdcResult *result) {
+    result->status.st0 = 0;
+    result->status.st1 = 0;
+    result->status.st2 = 0;
+    result->chrn.c = 0;
+    result->chrn.h = 0;
+    result->chrn.r = 0;
+    result->chrn.n = 0;
+}
+
+static void init_fdc_seek_result(FdcSeekResult *result) {
+    result->st0 = 0;
+    result->pcn = 0;
+}
 /* Sense Drive Status: returns 1 on success, 0 on timeout. */
 unsigned char cmd_sense_drive_status(unsigned char drive, unsigned char head,
                                      unsigned char *st3);
