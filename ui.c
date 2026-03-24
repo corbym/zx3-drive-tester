@@ -507,8 +507,6 @@ static void ui_begin_text_screen(const char* title, const char* controls) {
   strncpy(&title_row[1], title ? title : "", 31U);
   title_row[32] = '\0';
   ui_screen_write_row(0, title_row, ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
-  ui_screen_write_row(1, "------------------------------", ZX_COLOUR_BLACK,
-                      ZX_COLOUR_WHITE, 0);
 
   for (col = 0; col < 8; col++) {
     ui_attr_set_cell(0, (unsigned char)(24 + col), STRIPE_INK[col],
@@ -532,12 +530,12 @@ void ui_render_text_screen(const char* title, const char* controls,
   if (controls) {
     char controls_buf[40];
     snprintf(controls_buf, sizeof(controls_buf), "KEYS  : %s", controls);
-    ui_render_cached_text_row(2, controls_buf, UI_TEXT_ROW_STYLE_CONTROL);
+    ui_render_cached_text_row(1, controls_buf, UI_TEXT_ROW_STYLE_CONTROL);
   } else {
-    ui_render_cached_text_row(2, "", UI_TEXT_ROW_STYLE_BLANK);
+    ui_render_cached_text_row(1, "", UI_TEXT_ROW_STYLE_BLANK);
   }
 
-  unsigned char row = 3;
+  unsigned char row = 2;
   for (unsigned char i = 0; i < line_count && row < 23U; i++, row++) {
     if (lines[i]) {
       ui_render_cached_text_row(row, lines[i], UI_TEXT_ROW_STYLE_TEXT);
@@ -603,7 +601,7 @@ void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) 
   ui_hex_dump_prev_dlen = (unsigned short)data_len;
 
   ui_screen_write_row(HEX_DUMP_HEADER_ROW,
-                      " DATA PREVIEW (HEX + ASCII)     ",
+                      " DATA PREVIEW (HEX+ASCII)",
                       ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
 
   /* "XX XX XX XX XX XX XX XX AAAAAAAA" — 24 hex cols + 8 ASCII cols = 32 */

@@ -202,8 +202,8 @@ int read_menu_key_blocking(void) {
                 menu_key_latched[i] = 1;
                 {
                     char key = menu_keymap[i].key;
-                    if (key == 'F' || key == 'W') return MENU_KEY_UP;
-                    if (key == 'V' || key == 'S') return MENU_KEY_DOWN;
+                    if (key == 'F') return MENU_KEY_UP;
+                    if (key == 'V') return MENU_KEY_DOWN;
                     return key;
                 }
             }
@@ -268,8 +268,8 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
         printf(" %s\n", items[i].label);
     }
 
-    printf("\nUP   : W/F/CAPS+7\n");
-    printf("DOWN : S/V/CAPS+6\n");
+    printf("\nUP   : F/CAPS+7\n");
+    printf("DOWN : V/CAPS+6\n");
     printf("ENTER: SELECT  Q: QUIT\n");
 
     /* Reapply +3-style colour layout on top of terminal text output. */
