@@ -94,13 +94,51 @@ The suite starts ZEsarUX in headless +3 mode, loads the TAP file, exercises key 
 
 ### Latest CI Screen Pages
 
-![Main Menu](docs/screenshots/latest/03_menu_after_motor.bmp)
-
-![Motor and Drive Status](docs/screenshots/latest/02_motor_status.bmp)
-
-![Report Card](docs/screenshots/latest/04_report_card.bmp)
-
-![Run All Complete](docs/screenshots/latest/06_run_all_complete.bmp)
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/latest/01_menu.bmp" alt="Menu" />
+      <br />
+      <sub>01. Main menu</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/latest/02_motor_status.bmp" alt="Motor and Drive Status" />
+      <br />
+      <sub>02. Motor + drive status</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/latest/03_menu_after_motor.bmp" alt="Menu after Motor Test" />
+      <br />
+      <sub>03. Menu after motor test</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/latest/04_report_card.bmp" alt="Report Card" />
+      <br />
+      <sub>04. Report card</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/latest/05_menu_after_report.bmp" alt="Menu after Report" />
+      <br />
+      <sub>05. Menu after report card</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/latest/06_run_all_complete.bmp" alt="Run All Complete" />
+      <br />
+      <sub>06. Run-all complete</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/screenshots/latest/07_read_data_loop_hex_preview.bmp" alt="Read Data Loop Hex Preview" />
+      <br />
+      <sub>07. Read-data loop hex preview</sub>
+    </td>
+  </tr>
+</table>
 
 ## Docker Build & CI
 
