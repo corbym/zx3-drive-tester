@@ -124,8 +124,8 @@ func TestMenuAppearsAfterTapLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read OCR on menu: %v", err)
 	}
-	if !containsAll(ocr, "W/F", "S/V", "Q: QUIT") {
-		t.Fatalf("menu helper hints missing expected key aliases\nOCR:\n%s", ocr)
+	if !containsAll(ocr, "F/CAPS+7", "V/CAPS+6", "Q: QUIT") {
+		t.Fatalf("menu helper hints missing expected compact labels\nOCR:\n%s", ocr)
 	}
 }
 

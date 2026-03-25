@@ -219,7 +219,6 @@ int read_menu_key_blocking(void) {
 static void menu_apply_row_visual(unsigned char index, unsigned char selected) {
     const MenuItem *items = menu_items();
     unsigned char count = menu_item_count();
-    unsigned char col;
 
     if (index >= count) return;
 
