@@ -24,5 +24,4 @@ extern const char zx3_str_skipped[];
 
 extern const char zx3_label_result[];
 extern const char zx3_ctrl_enter_esc_menu[];
-extern const char zx3_ctrl_auto_return_menu[];
 

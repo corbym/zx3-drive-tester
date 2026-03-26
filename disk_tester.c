@@ -46,7 +46,7 @@ extern unsigned char inportb(unsigned short port);
 
 #define READ_LOOP_PAUSE_STEPS 2U
 #define READ_LOOP_PAUSE_MS    25U
-#define TEST_CARD_STATE_DELAY_MS 90U
+#define TEST_CARD_STATE_DELAY_MS 190U
 #define RUN_ALL_READY_DELAY_MS 150U
 #define RUN_ALL_RUNNING_DELAY_MS 120U
 #define RUN_ALL_RESULT_DELAY_MS 220U
@@ -360,14 +360,8 @@ static unsigned char show_selected_test_cards(void) {
     return (unsigned char) (report_status_code != REPORT_STATUS_RUNNING);
 }
 
-static int selected_test_prompt_mode(int interactive) {
-    return (interactive || show_selected_test_cards()) ? 1 : 0;
-}
-
 static const char *single_shot_test_controls(int interactive) {
-    return selected_test_prompt_mode(interactive)
-               ? zx3_ctrl_enter_esc_menu
-               : zx3_ctrl_auto_return_menu;
+    return interactive ? zx3_ctrl_enter_esc_menu : NULL;
 }
 
 /* -------------------------------------------------------------------------- */

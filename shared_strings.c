@@ -13,5 +13,4 @@ ZX3_STR_STORAGE const char zx3_str_skipped[] = "SKIPPED";
 
 ZX3_STR_STORAGE const char zx3_label_result[] = "RESULT: ";
 ZX3_STR_STORAGE const char zx3_ctrl_enter_esc_menu[] = "ENTER/ESC MENU";
-ZX3_STR_STORAGE const char zx3_ctrl_auto_return_menu[] = "AUTO RETURN MENU";
 
