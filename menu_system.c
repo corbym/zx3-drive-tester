@@ -8,17 +8,17 @@
 extern unsigned char inportb(unsigned short port);
 
 static const MenuItem MENU_ITEMS[] = {
-    {'M', "M Motor and drive status", 1},
-    {'P', "P Drive read ID probe", 1},
-    {'K', "K Recalibrate and seek track 2", 1},
-    {'I', "I Interactive step seek", 1},
-    {'T', "T Read ID on track 0", 1},
-    {'D', "D Read track data loop", 1},
-    {'H', "H Disk RPM check loop", 1},
-    {'A', "A Run all core tests", 1},
-    {'R', "R Show report card", 1},
-    {'C', "C Clear stored results", 1},
-    {'Q', "Q Quit", 1},
+    {'M', "Motor and drive status", 0},
+    {'P', "Drive read ID probe", 14},
+    {'K', "Recalibrate and seek track 2", 19},
+    {'I', "Interactive step seek", 0},
+    {'T', "Read ID on track 0", 11},
+    {'D', "Read track data loop", 11},
+    {'H', "Disk RPM check loop", 10},
+    {'A', "Run all core tests", 4},
+    {'R', "Show report card", 5},
+    {'C', "Clear stored results", 0},
+    {'Q', "Quit", 0},
 };
 
 
@@ -222,12 +222,12 @@ static void menu_apply_row_visual(unsigned char index, unsigned char selected) {
 
     if (index >= count) return;
 
-    unsigned char row = (unsigned char) (3U + index);
+    unsigned char row = (unsigned char) (1U + index);
     unsigned char paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
     ui_attr_set_run(row, 0, 32, ZX_COLOUR_BLACK, paper, 1);
     if (items[index].hot_col < 31U) {
         ui_attr_set_cell(row, (unsigned char)(items[index].hot_col + 1U),
-                         ZX_COLOUR_BLUE, paper, 1);
+                         ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
     }
     ui_screen_put_char(row, 31, selected ? '~' : ' ');
 }
@@ -258,10 +258,10 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
 
     ui_reset_text_screen_cache();
 
+    menu_status_value_text(status_value, total_pass);
+
     ui_term_clear();
     printf(" ZX +3 DISK TESTER\n");
-    menu_status_value_text(status_value, total_pass);
-    printf("STATUS: %s\n\n", status_value);
 
     for (i = 0; i < count; i++) {
         printf(" %s\n", items[i].label);
@@ -270,12 +270,15 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
     printf("\nUP   : F/CAPS+7\n");
     printf("DOWN : V/CAPS+6\n");
     printf("ENTER: SELECT  Q: QUIT\n");
+    printf("\n\n\n\n\n\n\nSTATUS: %s", status_value);
 
     /* Reapply +3-style colour layout on top of terminal text output. */
     ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
     ui_attr_set_run(0, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
+    ui_attr_set_run(13, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run(14, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
     ui_attr_set_run(15, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
-    ui_attr_set_run(16, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run(23, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
     for (col = 0; col < 8; col++) {
         ui_attr_set_cell(0, (unsigned char)(24 + col),
                          STRIPE_INK[col], STRIPE_PAPER[col], 1);

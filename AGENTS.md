@@ -148,8 +148,17 @@ Test logic writes results to a `TestCard` struct; rendering function converts to
 - **Add a new FDC command**: implement it in `disk_operations.c` following the existing pattern (`fdc_wait_rqm` + `fdc_write`/`fdc_read`); remember return 1=success, 0=failure. Wire it into the test sequence in `disk_tester.c`.
 
 ## Optimizations
-- Always refer to https://www.z88dk.org/wiki/doku.php?id=optimization and https://github.com/z88dk/z88dk/wiki/WritingOptimalCode for z88dk optimization tips. 
-- Run the memory_budget_regression_test.go test to see how much memory is used by the program. Optimize the code to reduce memory usage if required. 
+- Always refer to https://www.z88dk.org/wiki/doku.php?id=optimization and https://github.com/z88dk/z88dk/wiki/WritingOptimalCode for z88dk optimization tips.
+- Run the memory_budget_regression_test.go test to see how much memory is used by the program. Optimize the code to reduce memory usage if required.
+
+### Large struct locals — leave as locals
+Although the z88dk optimization guide recommends preferring globals/statics over locals to avoid IX frame-pointer overhead, this advice applies primarily to **scalar variables and small structs accessed field-by-field** within the function.
+
+All `TestCard`-derived structs (~455 bytes each) are **only ever taken as a pointer** (`&card`) and passed to init/set/render functions — the caller never touches fields directly. At `-SO3`, SCCZ80 handles this pattern efficiently without IX overhead: it allocates the struct by adjusting SP and computes `&card` from SP directly. No IX setup is needed.
+
+**Empirical result**: making `ReportCard card` `static` in `ui_render_report_card()` added **+441 bytes** to CODE.bin. Do not apply the static-local optimization to card structs.
+
+The static-variable optimization remains valid for frequently-read scalar state (e.g., the existing `static TestResults results`, `static unsigned char report_status_code`, etc.).
 
 ## Common Tasks
 

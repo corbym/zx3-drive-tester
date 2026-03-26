@@ -601,7 +601,7 @@ void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) 
   ui_hex_dump_prev_dlen = (unsigned short)data_len;
 
   ui_screen_write_row(HEX_DUMP_HEADER_ROW,
-                      " DATA PREVIEW (HEX+ASCII)",
+                      "DATA   :",
                       ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
 
   /* "XX XX XX XX XX XX XX XX AAAAAAAA" — 24 hex cols + 8 ASCII cols = 32 */

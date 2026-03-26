@@ -205,77 +205,34 @@ static const char *report_card_slot_label(ReportCardSlot slot) {
 
 static void report_card_build_row(char *out, ReportCardSlot slot,
                                   ReportCardState state) {
-    char bar[9];
-    unsigned char i;
-
-    for (i = 0; i < 8U; i++) {
-        bar[i] = '|';
-    }
-    bar[8] = '\0';
-    snprintf(out, 32U, "%-6s [%s] %s", report_card_slot_label(slot), bar,
+    snprintf(out, 32U, "%-8s%s", report_card_slot_label(slot),
              report_card_state_text(state));
 }
 
-static void report_card_build_overall_row(char *out, unsigned char total) {
-    char meter[6];
-
-    for (unsigned char i = 0; i < 5U; i++) {
-        meter[i] = i < total ? '|' : ' ';
-    }
-    meter[5] = '\0';
-    snprintf(out, 32U, "OVERALL [%s] %u/5 PASS", meter, (unsigned int) total);
+static void report_card_build_overall_row(char *out, unsigned char total,
+                                          ReportCardState state) {
+    snprintf(out, 32U, "OVERALL %u/5 %s", (unsigned int) total,
+             report_card_state_text(state));
 }
 
-/* Colouration for a single report-card row.  Screen row 3 = lines[0], so
- * slot i occupies screen row 4+i.  Called exclusively from report_card_render;
- * no knowledge of colouration escapes to the caller. */
+/* Colouration for a single report-card row.  Screen row 2 = lines[0], so
+ * slot i (base line 1+i) lands at screen row 3+i. */
 static void report_card_colour_row(unsigned char screen_row, const char *text,
                                    ReportCardState state) {
     unsigned char col;
-    const char *lbr;
-    const char *rbr;
-    unsigned char bar_ink;
-    unsigned char bar_paper;
-
     if (!text || screen_row >= 24U) return;
-
-    if (state == REPORT_CARD_STATE_PASS) {
-        bar_ink = ZX_COLOUR_BLACK;
-        bar_paper = ZX_COLOUR_GREEN;
-    }
-    else if (state == REPORT_CARD_STATE_FAIL) {
-        bar_ink = ZX_COLOUR_RED;
-        bar_paper = ZX_COLOUR_YELLOW;
-    }
-    else {
-        bar_ink = ZX_COLOUR_BLACK;
-        bar_paper = ZX_COLOUR_WHITE;
-    }
-
-    lbr = strchr(text, '[');
-    rbr = strchr(text, ']');
-    if (lbr && rbr && rbr > lbr) {
-        unsigned char bar_col = (unsigned char) (lbr - text + 1);
-        while (bar_col < 32U && &text[bar_col] < rbr) {
-            if (text[bar_col] == '|') {
-                ui_attr_set_cell(screen_row, bar_col, bar_ink, bar_paper, 1);
-            }
-            bar_col++;
-        }
-    }
-
     for (col = 0; col < 29U; col++) {
         if (state == REPORT_CARD_STATE_PASS && strncmp(&text[col], "PASS", 4U) == 0) {
             ui_attr_set_run(screen_row, col, 4, ZX_COLOUR_BLACK, ZX_COLOUR_GREEN, 1);
-            break;
+            return;
         }
         if (state == REPORT_CARD_STATE_FAIL && strncmp(&text[col], "FAIL", 4U) == 0) {
             ui_attr_set_run(screen_row, col, 4, ZX_COLOUR_RED, ZX_COLOUR_YELLOW, 1);
-            break;
+            return;
         }
         if (state == REPORT_CARD_STATE_NOT_RUN && strncmp(&text[col], "NOT RUN", 7U) == 0) {
             ui_attr_set_run(screen_row, col, 7, ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
-            break;
+            return;
         }
     }
 }
@@ -284,13 +241,12 @@ void report_card_init(ReportCard *card) {
     unsigned char i;
 
     test_card_init(&card->base, "TEST REPORT CARD",
-                   report_card_controls_text(REPORT_CARD_PHASE_IDLE), 9U);
+                   report_card_controls_text(REPORT_CARD_PHASE_IDLE), 8U);
     card->total_pass = 0U;
     card->phase = (unsigned char) REPORT_CARD_PHASE_IDLE;
     for (i = 0; i <= (unsigned char) REPORT_CARD_SLOT_OVERALL; i++) {
         card->slot_state[i] = (unsigned char) REPORT_CARD_STATE_NOT_RUN;
     }
-    test_card_set_line(&card->base, 8U, "BARS  : |=STATE COLOR");
 }
 
 void report_card_set_phase(ReportCard *card, ReportCardPhase phase) {
@@ -323,7 +279,8 @@ void report_card_render(ReportCard *card) {
         test_card_set_line(&card->base, (unsigned char) (1U + i), row_buf);
     }
 
-    report_card_build_overall_row(row_buf, card->total_pass);
+    report_card_build_overall_row(row_buf, card->total_pass,
+                                  (ReportCardState) card->slot_state[REPORT_CARD_SLOT_OVERALL]);
     test_card_set_line(&card->base, (unsigned char) (1U + REPORT_CARD_SLOT_OVERALL),
                        row_buf);
 
@@ -331,11 +288,11 @@ void report_card_render(ReportCard *card) {
                      report_card_result_text((ReportCardPhase) card->phase));
 
     /* Apply state-based colouration for every slot row.
-     * ui_render_text_screen places lines[0] at screen row 3, so slot i
-     * (which occupies base line 1+i) lands at screen row 4+i. */
+     * ui_render_text_screen places lines[0] at screen row 2, so slot i
+     * (base line 1+i) lands at screen row 3+i. */
     for (i = 0; i <= (unsigned char) REPORT_CARD_SLOT_OVERALL; i++) {
         report_card_colour_row(
-            (unsigned char) (4U + i),
+            (unsigned char) (3U + i),
             test_card_line(&card->base, (unsigned char) (1U + i)),
             (ReportCardState) card->slot_state[i]);
     }

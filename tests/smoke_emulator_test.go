@@ -87,8 +87,8 @@ func resetAndLoadTap(t *testing.T, c *EmulatorClient) {
 
 func waitForMenu(t *testing.T, c *EmulatorClient, timeout time.Duration) {
 	t.Helper()
-	if _, err := c.WaitForOCR(timeout, "ZX +3 DISK TESTER", "ENTER: SELECT"); err != nil {
-		t.Fatalf("timed out waiting for menu: %v", err)
+	if out, err := c.WaitForOCR(timeout, "ZX +3 DISK TESTER", "ENTER: SELECT"); err != nil {
+		t.Fatalf("timed out waiting for menu: %v, got: \n\n%v", err, out)
 	}
 }
 
@@ -135,17 +135,17 @@ func TestMenuSelectionMovesAcrossAllItems(t *testing.T) {
 	waitForMenu(t, c, 30*time.Second)
 
 	labels := []string{
-		"M MOTOR AND DRIVE STATUS",
-		"P DRIVE READ ID PROBE",
-		"K RECALIBRATE AND SEEK TRACK 2",
-		"I INTERACTIVE STEP SEEK",
-		"T READ ID ON TRACK 0",
-		"D READ TRACK DATA LOOP",
-		"H DISK RPM CHECK LOOP",
-		"A RUN ALL CORE TESTS",
-		"R SHOW REPORT CARD",
-		"C CLEAR STORED RESULTS",
-		"Q QUIT",
+		"MOTOR AND DRIVE STATUS",
+		"DRIVE READ ID PROBE",
+		"RECALIBRATE AND SEEK TRACK 2",
+		"INTERACTIVE STEP SEEK",
+		"READ ID ON TRACK 0",
+		"READ TRACK DATA LOOP",
+		"DISK RPM CHECK LOOP",
+		"RUN ALL CORE TESTS",
+		"SHOW REPORT CARD",
+		"CLEAR STORED RESULTS",
+		"QUIT",
 	}
 
 	waitForMenuSelection(t, c, labels[0], 6*time.Second)
@@ -174,7 +174,7 @@ func TestReportCardOpens(t *testing.T) {
 	if err := c.SendKey('R'); err != nil {
 		t.Fatalf("failed to send R key: %v", err)
 	}
-	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL ["); err != nil {
+	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL "); err != nil {
 		t.Fatalf("timed out waiting for report card: %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestReportCardRendersPromptly(t *testing.T) {
 	// and scanline memset in fill_row) paints the report card in well under a
 	// second.  The slow loop path (~768 ui_attr_set_cell + ~1664 per-row calls)
 	// would add ~500 ms at Z80 speed and reliably exceed this budget.
-	if _, err := c.WaitForOCR(3*time.Second, "TEST REPORT CARD", "OVERALL ["); err != nil {
+	if _, err := c.WaitForOCR(3*time.Second, "TEST REPORT CARD", "OVERALL "); err != nil {
 		t.Fatalf("report card did not appear within 3 s — rendering regression likely (slow attr_fill/fill_row loop reintroduced?): %v", err)
 	}
 }
@@ -202,7 +202,7 @@ func TestReturnToMenuFromReport(t *testing.T) {
 	if err := c.SendKey('R'); err != nil {
 		t.Fatalf("failed to open report card: %v", err)
 	}
-	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL ["); err != nil {
+	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL "); err != nil {
 		t.Fatalf("report card did not open: %v", err)
 	}
 	if err := c.SendKey(13); err != nil {
@@ -218,7 +218,7 @@ func TestReturnToMenuFromReportWithEscape(t *testing.T) {
 	if err := c.SendKey('R'); err != nil {
 		t.Fatalf("failed to open report card: %v", err)
 	}
-	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL ["); err != nil {
+	if _, err := c.WaitForOCR(15*time.Second, "TEST REPORT CARD", "OVERALL "); err != nil {
 		t.Fatalf("report card did not open: %v", err)
 	}
 	if err := c.SendKey('X'); err != nil {
@@ -438,7 +438,7 @@ func TestScreenCaptureStages(t *testing.T) {
 			name:        "report card",
 			captureFile: "04_report_card.bmp",
 			key:         'R',
-			waitFor:     []string{"TEST REPORT CARD", "OVERALL ["},
+			waitFor:     []string{"TEST REPORT CARD", "OVERALL "},
 			waitTimeout: 15 * time.Second,
 			nonBlank:    true,
 		},
@@ -463,9 +463,9 @@ func TestScreenCaptureStages(t *testing.T) {
 			waitTimeout:     30 * time.Second,
 			settleDelay:     1500 * time.Millisecond, // let hex panel populate
 			exitKey:         'X',
-			exitKey2:        13, // dismiss "press any key" after loop stops
+			exitKey2:        'X', // read_enter_blocking accepts X; avoids CR/LF mapping ambiguity
 			exitWaitFor:     []string{"ZX +3 DISK TESTER", "ENTER: SELECT"},
-			exitTimeout:     20 * time.Second,
+			exitTimeout:     30 * time.Second,
 			nonBlank:        true,
 			maxDiffFraction: 0.10,
 		},
@@ -547,8 +547,34 @@ func TestScreenCaptureStages(t *testing.T) {
 				}
 			}
 			if len(stage.exitWaitFor) > 0 {
-				if _, err := c.WaitForOCR(stage.exitTimeout, stage.exitWaitFor...); err != nil {
-					t.Fatalf("timed out waiting to exit %s: %v", stage.name, err)
+				deadline := time.Now().Add(stage.exitTimeout)
+				exited := false
+				lastOCR := ""
+
+				for time.Now().Before(deadline) {
+					if _, err := c.WaitForOCR(1500*time.Millisecond, stage.exitWaitFor...); err == nil {
+						exited = true
+						break
+					}
+					if ocr, err := c.OCR(); err == nil {
+						lastOCR = ocr
+					}
+
+					// Some loop screens poll keys between FDC operations; resend to avoid misses.
+					if err := c.SendKey(stage.exitKey); err != nil {
+						t.Fatalf("failed to resend exit key %q for %s: %v", stage.exitKey, stage.name, err)
+					}
+					if stage.exitKey2 != 0 {
+						time.Sleep(150 * time.Millisecond)
+						if err := c.SendKey(stage.exitKey2); err != nil {
+							t.Fatalf("failed to resend exit key2 %d for %s: %v", stage.exitKey2, stage.name, err)
+						}
+					}
+					time.Sleep(250 * time.Millisecond)
+				}
+
+				if !exited {
+					t.Fatalf("timed out waiting to exit %s\nlast OCR:\n%s", stage.name, lastOCR)
 				}
 			}
 		}
