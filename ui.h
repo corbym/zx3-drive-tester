@@ -35,6 +35,21 @@
  */
 void init_ui_font(void);
 
+/*
+ * Optional idle-pump callback invoked once per row during
+ * ui_render_hex_dump_panel.  Set to NULL to disable.  Use this to keep the
+ * key-scan latch alive during long render operations (same pattern as
+ * disk_operations_set_idle_pump).
+ */
+void ui_set_idle_pump(void (*pump)(void));
+
+/*
+ * Set the read-cycle counter shown in the hex dump header ("DATA #N").
+ * Pass 0 to suppress the counter (shows plain "DATA   :").
+ * Reset automatically by ui_reset_hex_dump_panel.
+ */
+void ui_set_hex_dump_cycle(unsigned int cycle);
+
 /* Clear the terminal viewport and reset the scroll position. */
 void ui_term_clear(void);
 

@@ -398,13 +398,16 @@ static void ui_style_screen_text_row(unsigned char row, const char* text) {
 }
 
 static unsigned char ui_row_tag_compute(const char* text, unsigned char style) {
-  /* DJB2-style checksum folded to 6 bits, combined with 2-bit style. */
+  /* DJB2-style checksum folded to 6 bits, combined with 2-bit style.
+   * Final avalanche: spread bit-0 differences to bit 3 so that adjacent
+   * single-character values (e.g. "0" vs "1") survive the & 0xFC mask. */
   const unsigned char* p = (const unsigned char*)(text ? text : "");
   unsigned char h = 0x55U;
 
   while (*p) {
     h = (unsigned char)((h << 1) ^ *p++);
   }
+  h ^= (unsigned char)(h << 3);
   return (unsigned char)((h & 0xFCU) | (style & 0x03U));
 }
 
@@ -568,25 +571,36 @@ void ui_render_text_screen(const char* title, const char* controls,
 #define HEX_DUMP_DATA_ROWS     13U
 
 static const char s_hex_digits[17] = "0123456789ABCDEF";
+
+static void (*s_ui_idle_pump)(void) = 0;
+static unsigned int s_hex_dump_cycle = 0;
+
+void ui_set_idle_pump(void (*pump)(void)) {
+  s_ui_idle_pump = pump;
+}
+
+void ui_set_hex_dump_cycle(unsigned int cycle) {
+  s_hex_dump_cycle = cycle;
+}
+
 void ui_reset_hex_dump_panel(void) {
   ui_hex_dump_prev_dlen = 0xFFFFU;
+  s_hex_dump_cycle = 0;
 }
 
 /*
- * ui_render_hex_dump_panel — render sector data preview below the card area.
+ * ui_render_hex_dump_panel — stream sector data preview below the card area.
  *
- * Shows the first 8 bytes as "XX XX XX XX XX XX XX XX AAAAAAAA" (32 chars):
+ * Each row shows 8 bytes as "XX XX XX XX XX XX XX XX AAAAAAAA" (32 chars):
  * hex pairs (3 chars each = 24 cols) then ASCII (8 cols, '.' for non-printable).
  *
  * Row 10: full-width header banner (white ink, blue paper).
- * Row 11: first 8 bytes in hex + ASCII (blue on white).
- * Rows 12-23: blank.
- *
- * Skips the redraw entirely when data length is unchanged.
+ * Rows 11-23: up to 13 rows × 8 bytes = 104 bytes shown, streamed every call.
  */
 void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) {
   char row_buf[33];
-  unsigned char r, col, bv, show_len;
+  unsigned char r, b, col, bv, row_bytes;
+  unsigned int offset;
 
   if (!data || data_len == 0U) {
     ui_reset_hex_dump_panel();
@@ -597,30 +611,46 @@ void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) 
     return;
   }
 
-  if ((unsigned short)data_len == ui_hex_dump_prev_dlen) return;
-  ui_hex_dump_prev_dlen = (unsigned short)data_len;
-
-  ui_screen_write_row(HEX_DUMP_HEADER_ROW,
-                      "DATA   :",
+  /* Header: "DATA   :" normally, "DATA #N:" when a cycle counter is set. */
+  if (s_hex_dump_cycle) {
+    snprintf(row_buf, sizeof(row_buf), "DATA #%u", s_hex_dump_cycle);
+  } else {
+    snprintf(row_buf, sizeof(row_buf), "DATA   :");
+  }
+  ui_screen_write_row(HEX_DUMP_HEADER_ROW, row_buf,
                       ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
 
-  /* "XX XX XX XX XX XX XX XX AAAAAAAA" — 24 hex cols + 8 ASCII cols = 32 */
-  show_len = (unsigned char)(data_len > 8U ? 8U : data_len);
-  col = 0U;
-  for (r = 0U; r < show_len; r++) {
-    bv = data[r];
-    row_buf[col++] = s_hex_digits[(bv >> 4) & 0x0FU];
-    row_buf[col++] = s_hex_digits[bv & 0x0FU];
-    row_buf[col++] = ' ';
-    row_buf[24U + r] = bv >= 0x20U ? (char)bv : '.';
-  }
-  row_buf[24U + show_len] = '\0';
-  ui_screen_write_row((unsigned char)(HEX_DUMP_HEADER_ROW + 1U), row_buf,
-                      ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+  /* Render up to HEX_DUMP_DATA_ROWS rows, 8 bytes each. */
+  for (r = 0U; r < HEX_DUMP_DATA_ROWS; r++) {
+    /* Pump the key latch between rows so key presses are not lost during
+     * the (potentially long) 13-row render on Z80. */
+    if (s_ui_idle_pump) s_ui_idle_pump();
 
-  for (r = 2U; r <= HEX_DUMP_DATA_ROWS; r++) {
-    ui_screen_write_row((unsigned char)(HEX_DUMP_HEADER_ROW + r), "",
-                        ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
+    offset = (unsigned int)r * 8U;
+    if (offset >= data_len) {
+      ui_screen_write_row((unsigned char)(HEX_DUMP_HEADER_ROW + 1U + r), "",
+                          ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
+      continue;
+    }
+    row_bytes = (unsigned char)(data_len - offset > 8U ? 8U : data_len - offset);
+    col = 0U;
+    for (b = 0U; b < 8U; b++) {
+      if (b < row_bytes) {
+        bv = data[offset + b];
+        row_buf[col++] = s_hex_digits[(bv >> 4) & 0x0FU];
+        row_buf[col++] = s_hex_digits[bv & 0x0FU];
+        row_buf[col++] = ' ';
+        row_buf[24U + b] = bv >= 0x20U && bv < 0x7FU ? (char)bv : '.';
+      } else {
+        row_buf[col++] = ' ';
+        row_buf[col++] = ' ';
+        row_buf[col++] = ' ';
+        row_buf[24U + b] = ' ';
+      }
+    }
+    row_buf[32] = '\0';
+    ui_screen_write_row((unsigned char)(HEX_DUMP_HEADER_ROW + 1U + r), row_buf,
+                        ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
   }
 }
 

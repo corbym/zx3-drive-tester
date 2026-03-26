@@ -49,7 +49,7 @@ extern unsigned char inportb(unsigned short port);
 #define TEST_CARD_STATE_DELAY_MS 190U
 #define RUN_ALL_READY_DELAY_MS 150U
 #define RUN_ALL_RUNNING_DELAY_MS 120U
-#define RUN_ALL_RESULT_DELAY_MS 220U
+#define RUN_ALL_RESULT_DELAY_MS 1500U
 
 #define RPM_LOOP_DELAY_MS 180U
 #define RPM_FAIL_DELAY_MS 450U
@@ -921,6 +921,8 @@ static void test_read_track_data_loop(void) {
     unsigned char drive_status_st3 = 0;
     unsigned int pass_count = 0;
     unsigned int fail_count = 0;
+    unsigned int track_read_count = 0;
+    unsigned char last_rendered_track = 0xFFU;
     unsigned int sector_data_len;
     unsigned char ui_redraw_required = 1;
 
@@ -931,6 +933,7 @@ static void test_read_track_data_loop(void) {
     memset(runtime_key_latched, 0, sizeof(runtime_key_latched));
     runtime_pending_key = 0;
     disk_operations_set_idle_pump(pump_runtime_key_latch);
+    ui_set_idle_pump(pump_runtime_key_latch);
 
     plus3_motor_on();
 
@@ -1012,6 +1015,11 @@ static void test_read_track_data_loop(void) {
         }
 
         pass_count++;
+        if (current_track != last_rendered_track) {
+            track_read_count = 0;
+            last_rendered_track = current_track;
+        }
+        track_read_count++;
 
         /*
          * Update the card with the new pass count, then blit the sector data
@@ -1020,6 +1028,7 @@ static void test_read_track_data_loop(void) {
          * ui_redraw_required is cleared here since we just rendered the card.
          */
         render_track_loop_active(current_track, pass_count, fail_count);
+        ui_set_hex_dump_cycle(track_read_count);
         ui_render_hex_dump_panel(sector_data, sector_data_len);
         ui_redraw_required = 0;
 
@@ -1041,6 +1050,7 @@ track_retry_fail:
 
     plus3_motor_off();
     disk_operations_set_idle_pump(0);
+    ui_set_idle_pump(0);
     render_track_loop_stopped(current_track, pass_count, fail_count);
     last_test_failed = (unsigned char) (fail_count > 0);
 }
@@ -1196,14 +1206,16 @@ static void run_all_tests(unsigned char human_mode) {
     ui_render_report_card();
     if (human_mode) delay_ms(RUN_ALL_READY_DELAY_EFFECTIVE_MS);
 
+    set_report_status(REPORT_STATUS_RUNNING);
     for (unsigned char i = 0; i < RUN_ALL_TEST_COUNT; i++) {
-        set_report_status(REPORT_STATUS_RUNNING);
         if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS);
         run_all_test_list[i](0);
-        set_report_status(REPORT_STATUS_COMPLETE);
         ui_render_report_card();
         if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_EFFECTIVE_MS);
     }
+    set_report_status(REPORT_STATUS_COMPLETE);
+    ui_render_report_card();
+    if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_EFFECTIVE_MS);
 
     last_test_failed = (unsigned char) (pass_count() < pass_count_ran());
 }
