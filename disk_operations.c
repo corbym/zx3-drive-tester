@@ -641,16 +641,16 @@ unsigned char wait_seek_complete(unsigned char drive, FdcSeekResult *out_result)
 const char *read_id_failure_reason(unsigned char st1, unsigned char st2) {
     static char fallback[5];
     static const char hex[] = "0123456789ABCDEF";
-    if (st1 & 0x01) return "Missing ID address mark";
-    if (st1 & 0x04) return "No data";
-    if (st1 & 0x10) return "Overrun";
-    if (st1 & 0x20) return "CRC error";
-    if (st1 & 0x80) return "End of cylinder";
-    if (st2 & 0x01) return "Missing data address mark";
-    if (st2 & 0x02) return "Bad cylinder";
-    if (st2 & 0x10) return "Wrong cylinder";
-    if (st2 & 0x20) return "CRC in data field";
-    if (st2 & 0x40) return "Control mark";
+    if (st1 & 0x01) return "MISS ID MARK";
+    if (st1 & 0x04) return "NO DATA";
+    if (st1 & 0x10) return "OVERRUN";
+    if (st1 & 0x20) return "CRC ERR";
+    if (st1 & 0x80) return "END OF CYL";
+    if (st2 & 0x01) return "MISS DATA";
+    if (st2 & 0x02) return "BAD CYL";
+    if (st2 & 0x10) return "WRONG CYL";
+    if (st2 & 0x20) return "DATA CRC";
+    if (st2 & 0x40) return "CTRL MARK";
 
     fallback[0] = hex[(st1 >> 4) & 0x0F];
     fallback[1] = hex[st1 & 0x0F];

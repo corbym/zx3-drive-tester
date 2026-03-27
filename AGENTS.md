@@ -31,8 +31,8 @@ A low-level ZX Spectrum +3 floppy drive test utility written in C and Z80 assemb
 **UI Rendering** (`ui.c/h`)
 - Hardcoded Spectrum screen memory layout: `0x4000` pixels, `0x5800` attributes (color)
 - Character ROM font copied to RAM on startup before ROM paging changes (preserves correctness under DivMMC)
-- Test card abstraction: structs contain title, controls text, and result lines; rendering handles styling via attribute bytes
 - Build flag: `HEADLESS_ROM_FONT=1` forces ROM glyphs in headless/OCR builds for maximum OCR recognition stability
+- Test card abstraction: structs contain title, controls text, and result lines; rendering handles styling via attribute bytes
 - **Row dirty cache**: `ui_row_tag[24]` holds a per-row DJB2 checksum combined with the row style. `ui_render_cached_text_row` skips the expensive pixel+attr write when the tag matches. Always invalidate with `ui_reset_text_screen_cache()` before switching away from the text-screen path.
 - **Label/value separation convention**: row headers (`"RESULT: "`, `"STATUS: "`, `"TRACK : "`, etc.) must never be embedded inside value strings. Use `test_card_set_labeled_value(card, row, LABEL, value, fallback)` for body rows. For the result row at the bottom, call `test_card_render(card, "RESULT: ", value)` — the label is passed as a separate argument and composed into a stack buffer at render time. This keeps each prefix string in the binary exactly once, reducing ROM pressure on the Z80.
 - **Hex dump panel** (`ui_render_hex_dump_panel`): renders rows 10–23 as a hex+ASCII preview of sector data. Row 10 is a header ("DATA #N" where N is the 1-based scroll page); rows 11–23 show up to 13 rows × 8 bytes from the current scroll offset. The panel has its own dirty tracking via `s_hex_dump_prev_scroll`: it skips all pixel writes when the scroll position is unchanged since the last render. Call `ui_reset_hex_dump_panel()` on track change to force a redraw on the next call. Call `ui_set_hex_dump_scroll(row)` to change the visible window; `ui_reset_hex_dump_panel` also resets scroll to 0.
@@ -68,7 +68,7 @@ When memory budget tests fail, treat `ZX3_STR_STORAGE` in `shared_strings.h` as 
 ```bash
 ./build.sh                           # TAP + DSK, default UI
 DEBUG=1 ./build.sh                   # Enable FDC debug output (MSR/ST0 trace)
-HEADLESS_ROM_FONT=1 ./build.sh       # (advanced) use DivMMC's pre-copied font
+HEADLESS_ROM_FONT=1 ./build.sh       #  use ROM font
 ```
 
 Uses `z88dk`: `zcc +zx -clib=new` for TAP; `-subtype=plus3` for DSK.

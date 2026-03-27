@@ -6,40 +6,49 @@
 #include <string.h>
 
 extern unsigned char inportb(unsigned short port);
-
+#if HEADLESS_ROM_FONT
 static const MenuItem MENU_ITEMS[] = {
-    {'M', "Motor and drive status", 0},
-    {'P', "Drive read ID probe", 14},
-    {'K', "Recalibrate and seek track 2", 19},
-    {'I', "Interactive step seek", 0},
-    {'T', "Read ID on track 0", 11},
-    {'D', "Read track data loop", 11},
-    {'H', "Disk RPM check loop", 10},
-    {'A', "Run all core tests", 4},
-    {'R', "Show report card", 5},
-    {'C', "Clear stored results", 0},
+    {'M', "Motor ready test", 0},
+    {'E', "Read ID Probe", 1},
+    {'B', "Recalibrate test", 6},
+    {'I', "Interactive seek", 0},
+    {'T', "Read ID T0", 10},
+    {'D', "Read data", 5},
+    {'H', "Disk RPM check", 10},
+    {'A', "Run all", 4},
+    {'R', "Show report", 5},
+    {'C', "Clear results", 0},
     {'Q', "Quit", 0},
 };
-
+#elif HEADLESS_ROM_FONT == 0
+static const MenuItem MENU_ITEMS[] = {
+    {'M', "MOTOR READY TEST", 0},
+    {'E', "READ ID PROBE", 1},
+    {'B', "RECALIBRATE TEST", 6},
+    {'I', "INTERACTIVE SEEK", 0},
+    {'T', "READ ID T0", 8},
+    {'D', "READ DATA", 5},
+    {'H', "DISK RPM CHECK", 10},
+    {'A', "RUN ALL", 4},
+    {'R', "SHOW REPORT", 5},
+    {'C', "CLEAR RESULTS", 0},
+    {'Q', "QUIT", 0},
+};
+#endif
 
 static const KeyMap menu_keymap[] = {
     {0xBFFE, 0x01, '\n'},
-    {0x7FFE, 0x01, ' '},
-    {0xFEFE, 0x04, 'X'},
     {0xFBFE, 0x01, 'Q'},
     {0xFDFE, 0x01, 'A'},
     {0x7FFE, 0x08, 'C'},
     {0xFBFE, 0x08, 'R'},
-    {0xBFFE, 0x04, 'K'},
     {0xFDFE, 0x04, 'D'},
-    {0xBFFE, 0x08, 'J'},
     {0xFBFE, 0x10, 'T'},
     {0x7FFE, 0x04, 'M'},
-    {0xDFFE, 0x01, 'P'},
     {0xDFFE, 0x04, 'I'},
     {0xBFFE, 0x10, 'H'},
-    {0xEFFE, 0x10, '6'},
-    {0xEFFE, 0x08, '7'},
+    {0xFBFE, 0x04, 'E'},
+    {0x7FFE, 0x10, 'B'},
 };
 
 enum { MENU_KEYMAP_COUNT = sizeof(menu_keymap) / sizeof(menu_keymap[0]) };
@@ -226,7 +235,7 @@ static void menu_apply_row_visual(unsigned char index, unsigned char selected) {
     unsigned char paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
     ui_attr_set_run(row, 0, 32, ZX_COLOUR_BLACK, paper, 1);
     if (items[index].hot_col < 31U) {
-        ui_attr_set_cell(row, (unsigned char)(items[index].hot_col + 1U),
+        ui_attr_set_cell(row, (unsigned char) (items[index].hot_col + 1U),
                          ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
     }
     ui_screen_put_char(row, 31, selected ? '~' : ' ');
@@ -241,9 +250,10 @@ void menu_update_selection(unsigned char old_index, unsigned char new_index) {
 static void menu_status_value_text(char *out, unsigned char total_pass) {
     if (!out) return;
     if (total_pass == 0U) {
-        strcpy(out, "NO TESTS RUN");
-    } else {
-        sprintf(out, "%u/5 PASS", (unsigned int)total_pass);
+        strcpy(out, "NOT RUN");
+    }
+    else {
+        sprintf(out, "%u/5 PASS", (unsigned int) total_pass);
     }
 }
 
@@ -254,7 +264,7 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
     unsigned char col;
     char status_value[20];
     static const unsigned char STRIPE_PAPER[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-    static const unsigned char STRIPE_INK[8]   = {7, 7, 7, 7, 0, 0, 0, 0};
+    static const unsigned char STRIPE_INK[8] = {7, 7, 7, 7, 0, 0, 0, 0};
 
     ui_reset_text_screen_cache();
 
@@ -280,11 +290,10 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
     ui_attr_set_run(15, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
     ui_attr_set_run(23, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
     for (col = 0; col < 8; col++) {
-        ui_attr_set_cell(0, (unsigned char)(24 + col),
+        ui_attr_set_cell(0, (unsigned char) (24 + col),
                          STRIPE_INK[col], STRIPE_PAPER[col], 1);
     }
     for (i = 0; i < count; i++) {
-        menu_apply_row_visual(i, (unsigned char)(i == selected_index));
+        menu_apply_row_visual(i, (unsigned char) (i == selected_index));
     }
 }
-

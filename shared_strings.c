@@ -10,6 +10,8 @@ ZX3_STR_STORAGE const char zx3_str_error[] = "ERROR";
 ZX3_STR_STORAGE const char zx3_str_check_media[] = "CHECK MEDIA";
 ZX3_STR_STORAGE const char zx3_str_out_of_range[] = "OUT-OF-RANGE";
 ZX3_STR_STORAGE const char zx3_str_skipped[] = "SKIPPED";
+ZX3_STR_STORAGE const char zx3_str_waiting[] = "WAITING";
+ZX3_STR_STORAGE const char zx3_str_user_exit[] = "USER EXIT";
 
 ZX3_STR_STORAGE const char zx3_label_result[] = "RESULT: ";
 ZX3_STR_STORAGE const char zx3_ctrl_enter_esc_menu[] = "ENTER/ESC MENU";

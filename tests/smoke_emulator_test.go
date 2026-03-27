@@ -88,7 +88,7 @@ func resetAndLoadTap(t *testing.T, c *EmulatorClient) {
 func waitForMenu(t *testing.T, c *EmulatorClient, timeout time.Duration) {
 	t.Helper()
 	if out, err := c.WaitForOCR(timeout, "ZX +3 DISK TESTER", "ENTER: SELECT"); err != nil {
-		t.Fatalf("timed out waiting for menu: %v, got: \n\n%v", err, out)
+		t.Fatalf("timed out waiting for menu: %v, got: \n\n/btw%v", err, out)
 	}
 }
 
@@ -135,16 +135,16 @@ func TestMenuSelectionMovesAcrossAllItems(t *testing.T) {
 	waitForMenu(t, c, 30*time.Second)
 
 	labels := []string{
-		"MOTOR AND DRIVE STATUS",
-		"DRIVE READ ID PROBE",
-		"RECALIBRATE AND SEEK TRACK 2",
-		"INTERACTIVE STEP SEEK",
-		"READ ID ON TRACK 0",
-		"READ TRACK DATA LOOP",
-		"DISK RPM CHECK LOOP",
-		"RUN ALL CORE TESTS",
-		"SHOW REPORT CARD",
-		"CLEAR STORED RESULTS",
+		"MOTOR READY TEST",
+		"READ ID PROBE",
+		"RECALIBRATE TEST",
+		"INTERACTIVE SEEK",
+		"READ ID T0",
+		"READ DATA",
+		"DISK RPM CHECK",
+		"RUN ALL",
+		"SHOW REPORT",
+		"CLEAR RESULTS",
 		"QUIT",
 	}
 
@@ -280,11 +280,11 @@ func TestMotorStatusMenu(t *testing.T) {
 		}
 		if ocr, err := c.OCR(); err == nil {
 			lastOCR = ocr
-			if containsAll(ocr, "MOTOR AND DRIVE STATUS", "ENTER/ESC MENU", "MOTOR :", "RESULT:") {
+			if containsAll(ocr, "MOTOR/DRIVE STATUS", "ENTER/ESC MENU", "MOTOR :", "RESULT:") {
 				return
 			}
 		}
-		if _, err := c.WaitForOCR(1500*time.Millisecond, "MOTOR AND DRIVE STATUS", "RESULT:"); err == nil {
+		if _, err := c.WaitForOCR(1500*time.Millisecond, "MOTOR/DRIVE STATUS", "RESULT:"); err == nil {
 			return
 		}
 	}
@@ -415,7 +415,7 @@ func TestScreenCaptureStages(t *testing.T) {
 			name:        "motor status",
 			captureFile: "02_motor_status.bmp",
 			key:         'M',
-			waitFor:     []string{"MOTOR AND DRIVE STATUS", "RESULT:"},
+			waitFor:     []string{"MOTOR/DRIVE STATUS", "RESULT:"},
 			waitTimeout: 15 * time.Second,
 			nonBlank:    true,
 		},
@@ -459,7 +459,7 @@ func TestScreenCaptureStages(t *testing.T) {
 			captureFile:     "07_read_data_loop_hex_preview.bmp",
 			loadDSK:         true,
 			key:             'D',
-			waitFor:         []string{"READ TRACK DATA LOOP"},
+			waitFor:         []string{"READ TRACK DATA"},
 			waitTimeout:     30 * time.Second,
 			settleDelay:     1500 * time.Millisecond, // let hex panel populate
 			exitKey:         'X',

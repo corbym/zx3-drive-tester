@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdio.h>
+#include "shared_strings.h"
 
 #define TEST_CARD_MAX_LINES 9U
 #define TEST_CARD_LINE_LEN 48U
@@ -254,15 +255,15 @@ void interactive_seek_card_render(const InteractiveSeekCard* card,
     read_id_probe_card_set_unknown((card_ptr))
 #define reset_read_id_probe(card_ptr) read_id_probe_card_reset((card_ptr))
 #define set_id_waiting(card_ptr)                                                 \
-    read_id_probe_card_set_id_status((card_ptr), "WAITING")
+    read_id_probe_card_set_id_status((card_ptr), zx3_str_waiting)
 #define set_id_probing(card_ptr)                                                 \
     read_id_probe_card_set_id_status((card_ptr), "PROBING")
 #define set_read_id_probe_status(card_ptr, have_st3, st3_value)                  \
     read_id_probe_card_set_drive_status((card_ptr), (have_st3), (st3_value))
 #define set_precheck_ok(card_ptr)                                                \
-    read_id_probe_card_set_id_status((card_ptr), "PRECHECK OK")
+    read_id_probe_card_set_id_status((card_ptr), "PRE OK")
 #define set_precheck_fail(card_ptr)                                              \
-    read_id_probe_card_set_id_status((card_ptr), "PRECHECK FAIL")
+    read_id_probe_card_set_id_status((card_ptr), "PRE FAIL")
 #define set_id_chrn(card_ptr, c_value, h_value, r_value, n_value)                \
     read_id_probe_card_set_id_chrn((card_ptr), (c_value), (h_value), (r_value),   \
                                                                  (n_value))
@@ -293,11 +294,11 @@ void interactive_seek_card_render(const InteractiveSeekCard* card,
 #define set_seek_status_skipped(card_ptr)                                        \
     recal_seek_card_set_seek_status((card_ptr), RECAL_SEEK_STATUS_SKIPPED)
 #define set_detail_check_media(card_ptr)                                         \
-    recal_seek_card_set_detail_status((card_ptr), "CHECK MEDIA")
+    recal_seek_card_set_detail_status((card_ptr), zx3_str_check_media)
 #define set_detail_recal_cmd_fail(card_ptr)                                      \
-    recal_seek_card_set_detail_status((card_ptr), "RECAL CMD FAIL")
+    recal_seek_card_set_detail_status((card_ptr), "RECAL FAIL")
 #define set_detail_seek_cmd_fail(card_ptr)                                       \
-    recal_seek_card_set_detail_status((card_ptr), "SEEK CMD FAIL")
+    recal_seek_card_set_detail_status((card_ptr), "SEEK FAIL")
 #define set_detail_st0_pcn(card_ptr, st0_value, pcn_value)                       \
     recal_seek_card_set_detail_st0_pcn((card_ptr), (st0_value), (pcn_value))
 #define set_detail_track(card_ptr, track_value)                                  \
@@ -314,9 +315,9 @@ void interactive_seek_card_render(const InteractiveSeekCard* card,
 #define set_last_no_seek(card_ptr)                                               \
     interactive_seek_card_set_last_status((card_ptr), "NO SEEK")
 #define set_last_seek_cmd_fail(card_ptr)                                         \
-    interactive_seek_card_set_last_status((card_ptr), "SEEK CMD FAIL")
+    interactive_seek_card_set_last_status((card_ptr), "SEEK FAIL")
 #define set_last_wait_timeout(card_ptr)                                          \
-    interactive_seek_card_set_last_status((card_ptr), "WAIT TIMEOUT")
+    interactive_seek_card_set_last_status((card_ptr), zx3_str_timeout)
 #define set_pcn(card_ptr, pcn_value)                                             \
     interactive_seek_card_set_pcn((card_ptr), (pcn_value))
 #define render_interactive_seek(card_ptr, result_value)                          \
@@ -333,9 +334,9 @@ void interactive_seek_card_render(const InteractiveSeekCard* card,
     read_id_card_set_chrn_valid((card_ptr), (c_value), (h_value), (r_value),       \
                                                             (n_value))
 #define set_chrn_invalid(card_ptr)                                               \
-    read_id_card_set_chrn_status((card_ptr), "INVALID")
+    read_id_card_set_chrn_status((card_ptr), zx3_str_invalid)
 #define set_detail_id_ok(card_ptr)                                               \
-    read_id_card_set_detail_status((card_ptr), "ID READ OK")
+    read_id_card_set_detail_status((card_ptr), "ID OK")
 #define set_detail_failure(card_ptr, reason_text)                                \
     read_id_card_set_detail_failure((card_ptr), (reason_text))
 #define render_read_id(card_ptr, result_value)                                   \

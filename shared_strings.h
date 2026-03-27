@@ -21,6 +21,8 @@ extern const char zx3_str_error[];
 extern const char zx3_str_check_media[];
 extern const char zx3_str_out_of_range[];
 extern const char zx3_str_skipped[];
+extern const char zx3_str_waiting[];
+extern const char zx3_str_user_exit[];
 
 extern const char zx3_label_result[];
 extern const char zx3_ctrl_enter_esc_menu[];

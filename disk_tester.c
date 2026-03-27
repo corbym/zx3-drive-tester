@@ -53,7 +53,11 @@ extern unsigned char inportb(unsigned short port);
 
 #define RPM_LOOP_DELAY_MS 180U
 #define RPM_FAIL_DELAY_MS 450U
-#define RPM_EXIT_ARM_DELAY_MS 400U
+#define RPM_EXIT_ARM_DELAY_MS 1500U
+/* Measure this many full revolutions per sample to reduce 20ms tick quantisation error.
+ * Must be a power of 2 so the compiler can use a shift instead of a division.
+ * 4 revs × 200ms = 800ms, safely inside the 1000ms inner-loop timeout. */
+#define RPM_SAMPLE_REVS 4U
 
 #ifdef DEBUG
 #define DEBUG_ENABLED 1
@@ -352,7 +356,7 @@ static unsigned char track_loop_consume_action(unsigned char *track,
 
 void press_any_key(int interactive) {
     if (interactive == 1) {
-        printf("\nPRESS ENTER OR ESC/X\n");
+        printf("\nENTER/ESC\n");
         fflush(stdout);
         read_enter_blocking();
     }
@@ -617,7 +621,7 @@ static void test_seek_interactive(void) {
 
     last_test_failed = 0;
     interactive_seek_card_init(&interactive_seek_card,
-                               "K UP  J DOWN  Q EXIT");
+                               "K/J NAV Q EXIT");
 
     plus3_motor_on();
 
@@ -716,7 +720,7 @@ static void test_read_id(int interactive) {
     {
         FdcSeekResult recal_result;
         if (!recalibrate_track0_strict(&recal_result)) {
-            set_detail_failure(&read_id_card, "RECAL FAILED");
+            set_detail_failure(&read_id_card, "RECAL FAIL");
             results.read_id_pass = 0;
             last_test_failed = 1;
             plus3_motor_off();
@@ -942,9 +946,6 @@ static void test_read_track_data_loop(void) {
     for (;;) {
         unsigned char seek_fail_st0 = 0;
 
-#if HEADLESS_ROM_FONT
-        if (pass_count + fail_count >= 3U) break;
-#endif
         /* Pump once, then handle hex-panel scroll before track nav. */
         pump_runtime_key_latch();
         if (runtime_pending_key == 'F') {
@@ -1078,6 +1079,7 @@ static void test_rpm_checker(void) {
     unsigned char st3 = 0;
     unsigned char exit_now = 0;
     unsigned char recal_pending = 1;
+    unsigned char rev_count = 0;
     unsigned short loop_start_tick = 0;
 
     seek_result.st0 = 0;
@@ -1089,9 +1091,6 @@ static void test_rpm_checker(void) {
     loop_start_tick = frame_ticks();
 
     while (!(rpm_exit_armed(loop_start_tick) && loop_exit_requested())) {
-#if HEADLESS_ROM_FONT
-        if (pass_count + fail_count >= 3U) break;
-#endif
 
         if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
             fail_count++;
@@ -1127,27 +1126,30 @@ static void test_rpm_checker(void) {
         seen_other = 0;
         dticks = 0;
         exit_now = 0;
-
+        rev_count = 0;
         for (unsigned char i = 0; i < 120; i++) {
-            if (rpm_exit_armed(loop_start_tick) && loop_exit_requested()) {
-                exit_now = 1;
-                break;
-            }
-            if (!cmd_read_id(FDC_DRIVE, 0, &rid_result)) {
-                break;
-            }
-            if (rid_result.chrn.r != first_r) {
-                seen_other = 1;
-            }
-            else if (seen_other) {
-                end_tick = frame_ticks();
-                dticks = (unsigned short) (end_tick - start_tick);
-                break;
-            }
-            delay_ms(2);
-            if ((unsigned short) (frame_ticks() - start_tick) > 50U) {
-                break;
-            }
+                if (rpm_exit_armed(loop_start_tick) && loop_exit_requested()) {
+                    exit_now = 1;
+                    break;
+                }
+                if (!cmd_read_id(FDC_DRIVE, 0, &rid_result)) {
+                    break;
+                }
+                if (rid_result.chrn.r != first_r) {
+                    seen_other = 1;
+                }
+                else if (seen_other) {
+                    rev_count++;
+                    if (rev_count >= RPM_SAMPLE_REVS) {
+                        end_tick = frame_ticks();
+                        dticks = (unsigned short) (end_tick - start_tick);
+                        break;
+                    }
+                }
+                delay_ms(2);
+                if ((unsigned short) (frame_ticks() - start_tick) > 50U) {
+                    break;
+                }
         }
 
         if (exit_now) {
@@ -1162,7 +1164,7 @@ static void test_rpm_checker(void) {
             continue;
         }
 
-        period_ms = (unsigned int) dticks * 20U;
+        period_ms = ((unsigned int) dticks * 20U) / RPM_SAMPLE_REVS;
         if (period_ms == 0) {
             fail_count++;
             render_rpm_loop_period_bad(rpm, pass_count, fail_count);
@@ -1283,12 +1285,12 @@ int main(void) {
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;
-            case 'P':
+            case 'E':
                 test_read_id_probe(1);
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;
-            case 'K':
+            case 'B':
                 test_recal_seek_track2(1);
                 wait_after_test_run(1);
                 menu_dirty = 1;
@@ -1327,13 +1329,13 @@ int main(void) {
                 memset(&results, 0, sizeof(results));
                 last_test_failed = 0;
                 reset_report_progress();
-                printf("RESULTS CLEARED\n");
+                printf("CLEARED\n");
                 press_any_key(1);
                 menu_dirty = 1;
                 break;
             case 'Q':
                 plus3_motor_off();
-                printf("Exiting...\n");
+                printf("EXIT\n");
                 return 0;
             default:
                 /* Ignore unknown keys in menu to avoid display jitter. */
