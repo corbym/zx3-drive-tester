@@ -1,4 +1,4 @@
-# zx3-disk-tester
+# zx3-drive-tester
 
 ⚠️Not fully tested on a real +3 - no guarantee it won't break your floppies. You have been warned!⚠️
 
