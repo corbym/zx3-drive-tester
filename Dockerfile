@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     flex \
     unzip \
     libncurses-dev \
+    libssl-dev \
     libgmp-dev \
     libxml2-dev \
     xorg-dev \
@@ -52,7 +53,7 @@ RUN cd /tmp && \
     wget -q https://github.com/chernandezba/zesarux/archive/refs/tags/${ZESARUX_TAG}.tar.gz -O zesarux.tar.gz && \
     tar -xzf zesarux.tar.gz && \
     cd zesarux-${ZESARUX_TAG}/src && \
-    ./configure --disable-ssl --disable-caca --disable-aa --disable-cursesw --prefix /usr/local && \
+    ./configure --enable-ssl --disable-caca --disable-aa --disable-cursesw --prefix /usr/local && \
     make clean && \
     make -j"$(nproc)" && \
     make install && \
