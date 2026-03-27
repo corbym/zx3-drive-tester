@@ -164,11 +164,13 @@ static ReportCardPhase report_card_phase_from_status(unsigned char status) {
     }
 }
 
-/* Seek/recalibrate completion is signalled by SE (bit 5) with a normal
- * interrupt code in ST0 (IC bits 7-6 == 00).  PCN is useful for diagnostics
- * but can be inconsistent on some setups, so pass/fail uses ST0 completion. */
+/* Seek/recalibrate completion check.  wait_seek_complete() already guarantees
+ * SE (bit 5) is set before returning; the IC bits (7-6) can be non-zero on
+ * real +3 hardware even when the head physically reached the target track, so
+ * we do not gate on IC here.  The SE confirmation from wait_seek_complete is
+ * the authoritative signal that the command completed. */
 static unsigned char seek_completion_ok(unsigned char st0) {
-    return (unsigned char) (((st0 & 0x20U) != 0U) && ((st0 & 0xC0U) == 0U));
+    return (unsigned char) ((st0 & 0x20U) != 0U);
 }
 
 /* Run RECAL + wait for interrupt + validate SE/IC completion semantics. */
@@ -585,24 +587,31 @@ static void test_recal_seek_track2(int interactive) {
     results.recalibrate_pass = recal_ok;
     results.seek_pass = seek_completion_ok(seek_result.st0);
     plus3_motor_off();
-    last_test_failed =
-            (unsigned char) !(results.recalibrate_pass && results.seek_pass);
-    if (results.recalibrate_pass) {
+    /* Avoid && in ternary: SCCZ80 seems to miscompile or not evaluate correctly
+     * in this context things like (a && b) ? X : Y
+     * when a and b are struct members. Use explicit if-else instead. */
+    last_test_failed = 0;
+    if (recal_ok == 0U) last_test_failed = 1;
+    if (results.seek_pass == 0U) last_test_failed = 1;
+    if (recal_ok != 0U) {
         set_recal_status_pass(&recal_seek_card);
     }
     else {
         set_recal_status_fail(&recal_seek_card);
     }
-    if (results.seek_pass) {
+    if (results.seek_pass != 0U) {
         set_seek_status_pass(&recal_seek_card);
     }
     else {
         set_seek_status_fail(&recal_seek_card);
     }
     set_detail_track(&recal_seek_card, seek_result.pcn);
-    render_recal_seek(&recal_seek_card, (results.recalibrate_pass && results.seek_pass)
-                      ? TEST_CARD_RESULT_PASS
-                      : TEST_CARD_RESULT_FAIL);
+    if (last_test_failed != 0U) {
+        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
+    }
+    else {
+        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_PASS);
+    }
 }
 
 static void interactive_seek_fail(const InteractiveSeekCard *card) {

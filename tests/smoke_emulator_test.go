@@ -155,7 +155,6 @@ func TestMenuSelectionMovesAcrossAllItems(t *testing.T) {
 		"RUN ALL",
 		"SHOW REPORT",
 		"CLEAR RESULTS",
-		"QUIT",
 	}
 
 	waitForMenuSelection(t, c, labels[0], 6*time.Second)
@@ -272,6 +271,55 @@ func TestRunAllCompletes(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for run-all completion\nlast OCR:\n%s", lastOCR)
+}
+
+func TestRecalSeekTrack2(t *testing.T) {
+	c := requireSuiteClient(t)
+	resetAndLoadTap(t, c)
+	waitForMenu(t, c, 30*time.Second)
+	// Load DSK so the drive has a readable disk inserted (drive-ready check inside test).
+	if err := c.Smartload(dskPath); err != nil {
+		t.Fatalf("failed to smartload DSK: %v", err)
+	}
+	if err := c.HardReset(); err != nil {
+		t.Fatalf("failed hard-reset after DSK smartload: %v", err)
+	}
+	if _, err := c.WaitForOCR(20*time.Second, "DISK TESTER", "ENTER: SELECT"); err != nil {
+		t.Fatalf("timed out waiting for menu after DSK load: %v", err)
+	}
+
+	// 'B' triggers the RECAL/SEEK TRACK 2 test from the menu.
+	if err := c.SendKey('B'); err != nil {
+		t.Fatalf("failed to send B key for recal/seek test: %v", err)
+	}
+
+	// Wait for the test card to become visible.
+	if _, err := c.WaitForOCR(15*time.Second, "RECAL", "RESULT"); err != nil {
+		t.Fatalf("timed out waiting for recal/seek card to appear: %v", err)
+	}
+
+	// Poll until the result is settled (not RUNNING/READY).
+	deadline := time.Now().Add(30 * time.Second)
+	var lastOCR string
+	for time.Now().Before(deadline) {
+		ocr, err := c.OCR()
+		if err == nil {
+			lastOCR = ocr
+			upper := strings.ToUpper(ocr)
+			if strings.Contains(upper, "RESULT") &&
+				!strings.Contains(upper, "RUNNING") &&
+				!strings.Contains(upper, "READY") {
+				if strings.Contains(upper, "FAIL") {
+					t.Fatalf("recal/seek test reported FAIL — IC-bit false negative or seek regression\nOCR:\n%s", ocr)
+				}
+				if strings.Contains(upper, "PASS") {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for recal/seek result\nlast OCR:\n%s", lastOCR)
 }
 
 func TestMotorStatusMenu(t *testing.T) {

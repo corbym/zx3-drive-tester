@@ -12,13 +12,12 @@ static const MenuItem MENU_ITEMS[] = {
     {'E', "Read ID Probe", 1},
     {'B', "Recalibrate test", 6},
     {'I', "Interactive seek", 0},
-    {'T', "Read ID T0", 10},
+    {'T', "Read ID T0", 8},
     {'D', "Read data", 5},
     {'H', "Disk RPM check", 10},
     {'A', "Run all", 4},
     {'R', "Show report", 5},
     {'C', "Clear results", 0},
-    {'Q', "Quit", 0},
 };
 #elif HEADLESS_ROM_FONT == 0
 static const MenuItem MENU_ITEMS[] = {
@@ -32,7 +31,6 @@ static const MenuItem MENU_ITEMS[] = {
     {'A', "RUN ALL", 4},
     {'R', "SHOW REPORT", 5},
     {'C', "CLEAR RESULTS", 0},
-    {'Q', "QUIT", 0},
 };
 #endif
 
@@ -277,7 +275,7 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
         printf(" %s\n", items[i].label);
     }
 
-    printf("\nUP   : F/CAPS+7\n");
+    printf("\n\nUP   : F/CAPS+7\n");
     printf("DOWN : V/CAPS+6\n");
     printf("ENTER: SELECT  Q: QUIT\n");
     printf("\n\n\n\n\n\n\nSTATUS: %s", status_value);
