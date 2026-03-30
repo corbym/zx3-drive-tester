@@ -300,7 +300,9 @@ func TestRecalSeekTrack2(t *testing.T) {
 		t.Fatalf("timed out waiting for recal/seek card to appear: %v", err)
 	}
 
-	// Poll until the result is settled (not RUNNING/READY).
+	// Poll until the result line settles to PASS or FAIL.
+	// Note: the card has a "READY : YES" data field, so we match "RESULT:"
+	// specifically rather than checking for the absence of "READY".
 	deadline := time.Now().Add(30 * time.Second)
 	var lastOCR string
 	for time.Now().Before(deadline) {
@@ -308,15 +310,11 @@ func TestRecalSeekTrack2(t *testing.T) {
 		if err == nil {
 			lastOCR = ocr
 			upper := strings.ToUpper(ocr)
-			if strings.Contains(upper, "RESULT") &&
-				!strings.Contains(upper, "RUNNING") &&
-				!strings.Contains(upper, "READY") {
-				if strings.Contains(upper, "FAIL") {
-					t.Fatalf("recal/seek test reported FAIL — IC-bit false negative or seek regression\nOCR:\n%s", ocr)
-				}
-				if strings.Contains(upper, "PASS") {
-					return
-				}
+			if strings.Contains(upper, "RESULT: PASS") {
+				return
+			}
+			if strings.Contains(upper, "RESULT: FAIL") {
+				t.Fatalf("recal/seek test reported FAIL — IC-bit false negative or seek regression\nOCR:\n%s", ocr)
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
