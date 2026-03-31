@@ -87,16 +87,12 @@ static unsigned char startup_bank678;
 
 /* Test results storage */
 typedef struct {
-    unsigned char motor_test_pass;
-    unsigned char motor_test_ran;
-    unsigned char sense_drive_pass;
-    unsigned char sense_drive_ran;
-    unsigned char recalibrate_pass;
-    unsigned char recalibrate_ran;
-    unsigned char seek_pass;
-    unsigned char seek_ran;
-    unsigned char read_id_pass;
-    unsigned char read_id_ran;
+    unsigned char probe_pass;
+    unsigned char probe_ran;
+    unsigned char seek_read_pass;
+    unsigned char seek_read_ran;
+    unsigned char rpm_pass;
+    unsigned char rpm_ran;
 } TestResults;
 
 static TestResults results;
@@ -129,15 +125,13 @@ static void disable_terminal_auto_pause(void) {
 }
 
 static unsigned char pass_count(void) {
-    return (unsigned char) (results.motor_test_pass + results.sense_drive_pass +
-                            results.recalibrate_pass + results.seek_pass +
-                            results.read_id_pass);
+    return (unsigned char)(results.probe_pass + results.seek_read_pass +
+                           results.rpm_pass);
 }
 
 static unsigned char pass_count_ran(void) {
-    return (unsigned char) (results.motor_test_ran + results.sense_drive_ran +
-                            results.recalibrate_ran + results.seek_ran +
-                            results.read_id_ran);
+    return (unsigned char)(results.probe_ran + results.seek_read_ran +
+                           results.rpm_ran);
 }
 
 static void reset_report_progress(void) {
@@ -150,9 +144,8 @@ static void set_report_status(unsigned char status_code) {
 
 
 static unsigned char any_report_test_ran(void) {
-    return (unsigned char) (results.motor_test_ran || results.sense_drive_ran ||
-                            results.recalibrate_ran || results.seek_ran ||
-                            results.read_id_ran);
+    return (unsigned char)(results.probe_ran || results.seek_read_ran ||
+                           results.rpm_ran);
 }
 
 
@@ -195,29 +188,23 @@ static unsigned char recalibrate_track0_strict(FdcSeekResult *result) {
 
 static void ui_render_report_card(void) {
     const unsigned char total = pass_count();
-    ReportCardState last_state;
     ReportCard card;
+    ReportCardState overall_state;
 
     report_card_init(&card);
     report_card_set_phase(&card, report_card_phase_from_status(report_status_code));
     report_card_set_total_pass(&card, total);
 
-    if (!any_report_test_ran()) {
-        last_state = REPORT_CARD_STATE_NOT_RUN;
-    }
-    else {
-        last_state =
-                last_test_failed ? REPORT_CARD_STATE_FAIL : REPORT_CARD_STATE_PASS;
-    }
+    report_card_set_slot_state(&card, REPORT_CARD_SLOT_PROBE,
+                               report_card_state_from_runpass(results.probe_ran,
+                                                              results.probe_pass));
+    report_card_set_slot_state(&card, REPORT_CARD_SLOT_SEEK,
+                               report_card_state_from_runpass(results.seek_read_ran,
+                                                              results.seek_read_pass));
+    report_card_set_slot_state(&card, REPORT_CARD_SLOT_RPM,
+                               report_card_state_from_runpass(results.rpm_ran,
+                                                              results.rpm_pass));
 
-    ReportCardState motor_state = report_card_state_from_runpass(results.motor_test_ran, results.motor_test_pass);
-    ReportCardState drive_state = report_card_state_from_runpass(results.sense_drive_ran,
-                                                                 results.sense_drive_pass);
-    ReportCardState recal_state = report_card_state_from_runpass(results.recalibrate_ran,
-                                                                 results.recalibrate_pass);
-    ReportCardState seek_state = report_card_state_from_runpass(results.seek_ran, results.seek_pass);
-    ReportCardState readid_state = report_card_state_from_runpass(results.read_id_ran, results.read_id_pass);
-    ReportCardState overall_state;
     if (!any_report_test_ran()) {
         overall_state = REPORT_CARD_STATE_NOT_RUN;
     }
@@ -227,13 +214,6 @@ static void ui_render_report_card(void) {
     else {
         overall_state = REPORT_CARD_STATE_FAIL;
     }
-
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_LAST, last_state);
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_MOTOR, motor_state);
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_DRIVE, drive_state);
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_RECAL, recal_state);
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_SEEK, seek_state);
-    report_card_set_slot_state(&card, REPORT_CARD_SLOT_READID, readid_state);
     report_card_set_slot_state(&card, REPORT_CARD_SLOT_OVERALL, overall_state);
 
     report_card_render(&card);
@@ -386,49 +366,14 @@ static const char *single_shot_test_controls(int interactive) {
 /* Tests                                                                      */
 /* -------------------------------------------------------------------------- */
 
-static void test_motor_and_drive_status(int interactive) {
+static void test_drive_probe(int interactive) {
     unsigned char status_3 = 0;
     unsigned char have_st3 = 0;
-    unsigned char show_live_card = show_selected_test_cards();
-    MotorDriveCard motor_drive_card;
-
-    last_test_failed = 0;
-    results.motor_test_ran = 1;
-    results.sense_drive_ran = 1;
-    motor_drive_card_init(&motor_drive_card, single_shot_test_controls(interactive));
-
-    if (show_live_card) {
-        reset_motor_drive(&motor_drive_card);
-        render_motor_drive(&motor_drive_card, TEST_CARD_RESULT_READY);
-        delay_ms(TEST_CARD_STATE_DELAY_MS);
-        set_card_motor_on(&motor_drive_card);
-        render_motor_drive(&motor_drive_card, TEST_CARD_RESULT_RUNNING);
-    }
-
-    motor_on();
-
-    have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &status_3);
-    if (have_st3) ui_set_drive_st3(status_3);
-    set_motor_drive_status(&motor_drive_card, have_st3, status_3);
-    results.sense_drive_pass = have_st3 ? 1U : 0U;
-
-    motor_off();
-    results.motor_test_pass = have_st3;
-    last_test_failed = (unsigned char) (results.sense_drive_pass == 0);
-    set_card_motor_off(&motor_drive_card);
-    render_motor_drive(&motor_drive_card, results.sense_drive_pass
-                       ? TEST_CARD_RESULT_PASS
-                       : TEST_CARD_RESULT_FAIL);
-}
-
-static void test_read_id_probe(int interactive) {
-    unsigned char status_3 = 0;
     FdcSeekResult seek_result;
     unsigned char rid_ok = 0;
     FdcResult rid_result;
-    unsigned char have_st3 = 0;
     unsigned char show_live_card = show_selected_test_cards();
-    ReadIdProbeCard read_id_probe_card;
+    DriveProbeCard card;
 
     seek_result.st0 = 0;
     seek_result.pcn = 0;
@@ -441,190 +386,332 @@ static void test_read_id_probe(int interactive) {
     rid_result.chrn.n = 0;
 
     last_test_failed = 0;
-    read_id_probe_card_init(&read_id_probe_card,
-                            single_shot_test_controls(interactive));
+    results.probe_ran = 1;
+    drive_probe_card_init(&card, single_shot_test_controls(interactive));
 
     if (show_live_card) {
-        reset_read_id_probe(&read_id_probe_card);
-        render_read_id_probe(&read_id_probe_card, TEST_CARD_RESULT_READY);
+        drive_probe_card_render(&card, TEST_CARD_RESULT_READY);
         delay_ms(TEST_CARD_STATE_DELAY_MS);
-        set_id_probing(&read_id_probe_card);
-        render_read_id_probe(&read_id_probe_card, TEST_CARD_RESULT_RUNNING);
+        drive_probe_card_set_motor(&card, 1);
+        drive_probe_card_render(&card, TEST_CARD_RESULT_RUNNING);
     }
 
     motor_on();
 
-    /* 1) Raw drive lines (ST3), informational */
+    /* ST3 — shows READY/WPROT/TRACK0/FAULT lines */
     have_st3 = cmd_sense_drive_status(FDC_DRIVE, 0, &status_3);
     if (have_st3) ui_set_drive_st3(status_3);
-    set_read_id_probe_status(&read_id_probe_card, have_st3, status_3);
+    drive_probe_card_set_st3(&card, have_st3, status_3);
 
-    /* 2) A command that tends to surface "not ready" in ST0 (and steps hardware)
-     */
-    if (cmd_recalibrate(FDC_DRIVE) && wait_seek_complete(FDC_DRIVE, &seek_result)) {
-        set_precheck_ok(&read_id_probe_card);
-    }
-    else {
-        set_precheck_fail(&read_id_probe_card);
-    }
+    /* Recalibrate to track 0 before READ ID */
+    cmd_recalibrate(FDC_DRIVE);
+    wait_seek_complete(FDC_DRIVE, &seek_result);
 
-    /* 3) Media probe: Read ID, best indicator for both hardware and emulation */
+    /* READ ID: primary pass/fail indicator */
     rid_ok = cmd_read_id(FDC_DRIVE, 0, &rid_result);
 
-    /*
-     * Probe is informational — result is shown on its own card only.
-     * Do NOT write to results.read_id_ran/pass; that slot belongs to the
-     * dedicated test_read_id function and writing here would cause the
-     * report card READID slot to show FAIL mid-run when the real test
-     * hasn't executed yet.
-     */
-    last_test_failed = (unsigned char) (rid_ok == 0);
+    results.probe_pass = (unsigned char)(have_st3 && rid_ok);
+    last_test_failed = (unsigned char)(results.probe_pass == 0);
     motor_off();
+    drive_probe_card_set_motor(&card, 0);
+
     if (rid_ok) {
-        set_id_chrn(&read_id_probe_card,
-                    rid_result.chrn.c,
-                    rid_result.chrn.h,
-                    rid_result.chrn.r,
-                    rid_result.chrn.n
-        );
+        drive_probe_card_set_id_chrn(&card, rid_result.chrn.c, rid_result.chrn.h,
+                                     rid_result.chrn.r, rid_result.chrn.n);
     }
     else {
-        set_id_failure(&read_id_probe_card,
-                       read_id_failure_reason(
-                           rid_result.status.st1,
-                           rid_result.status.st2
-                       )
-        );
+        drive_probe_card_set_id_status(&card,
+                                       read_id_failure_reason(rid_result.status.st1,
+                                                               rid_result.status.st2));
     }
-    render_read_id_probe(&read_id_probe_card, rid_ok
-                         ? TEST_CARD_RESULT_PASS
-                         : TEST_CARD_RESULT_FAIL);
+    drive_probe_card_render(&card, results.probe_pass
+                            ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
 }
 
-static void test_recal_seek_track2(int interactive) {
-    unsigned char st3 = 0;
-    unsigned char track_target = 2;
-    unsigned char recal_ok = 0;
+/* Fixed seek pattern: 0 → 39 → 0 → 79 → 0 (tests full travel both ways) */
+#define SEEK_PATTERN_LEN 5U
+static const unsigned char seek_pattern[SEEK_PATTERN_LEN] = {0U, 39U, 0U, 79U, 0U};
+
+static void test_seek_and_read(int interactive) {
+    static unsigned char sector_data[1024];
+    FdcResult read_id_result;
+    FdcResult read_data_result;
     FdcSeekResult seek_result;
+    unsigned char drive_status_st3 = 0;
+    unsigned int sr_pass = 0;
+    unsigned int sr_fail = 0;
+    unsigned int sector_data_len = 0;
+    unsigned char recal_ok = 0;
+    unsigned char any_seek_fail = 0;
     unsigned char show_live_card = show_selected_test_cards();
-    RecalSeekCard recal_seek_card;
-    (void) interactive;
+    SeekReadCard card;
 
     seek_result.st0 = 0;
     seek_result.pcn = 0;
 
     last_test_failed = 0;
-    results.recalibrate_ran = 1;
-    results.seek_ran = 1;
-    recal_seek_card_init(&recal_seek_card, single_shot_test_controls(interactive));
+    results.seek_read_ran = 1;
+
+    if (interactive) {
+        /* --- Interactive mode: J/K track navigation with hex dump panel --- */
+        unsigned char current_track = 0;
+        unsigned char seek_required = 1;
+        unsigned char recal_required = 1;
+        unsigned char ui_redraw_required = 1;
+        unsigned char hex_scroll_row = 0;
+        unsigned char max_scroll_rows = 0;
+
+        seek_read_card_init(&card, "K/J NAV F/V SCRL X EXIT");
+
+        memset(runtime_key_latched, 0, sizeof(runtime_key_latched));
+        runtime_pending_key = 0;
+        disk_operations_set_idle_pump(pump_runtime_key_latch);
+        ui_set_idle_pump(pump_runtime_key_latch);
+
+        motor_on();
+
+        for (;;) {
+            pump_runtime_key_latch();
+            if (runtime_pending_key == 'F') {
+                runtime_pending_key = 0;
+                if (hex_scroll_row > 0U) hex_scroll_row--;
+            } else if (runtime_pending_key == 'V') {
+                runtime_pending_key = 0;
+                if (hex_scroll_row < max_scroll_rows) hex_scroll_row++;
+            }
+
+            if (track_loop_consume_action(&current_track, &seek_required,
+                                          &ui_redraw_required)) {
+                break;
+            }
+
+            if (ui_redraw_required) {
+                seek_read_card_set_track(&card, current_track);
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                seek_read_card_render(&card, TEST_CARD_RESULT_ACTIVE);
+                ui_redraw_required = 0;
+            }
+
+            if (!wait_drive_ready(FDC_DRIVE, 0, &drive_status_st3)) {
+                sr_fail++;
+                seek_read_card_set_ready_fail_st3(&card, drive_status_st3);
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                seek_required = 1;
+                recal_required = 1;
+                ui_redraw_required = 0;
+                delay_ms(20);
+                continue;
+            }
+            seek_read_card_set_ready(&card, 1);
+
+            if (seek_required) {
+                if (recal_required) {
+                    FdcSeekResult recal_result;
+                    seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_RUNNING);
+                    if (!recalibrate_track0_strict(&recal_result)) {
+                        sr_fail++;
+                        seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_FAIL);
+                        seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                        seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                        seek_required = 1;
+                        ui_redraw_required = 0;
+                        delay_ms(20);
+                        continue;
+                    }
+                    seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_PASS);
+                    recal_required = 0;
+                }
+                seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_RUNNING);
+                if (!cmd_seek(FDC_DRIVE, 0, current_track) ||
+                    !wait_seek_complete(FDC_DRIVE, &seek_result)) {
+                    sr_fail++;
+                    seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_FAIL);
+                    seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                    seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                    seek_required = 1;
+                    ui_redraw_required = 0;
+                    delay_ms(20);
+                    continue;
+                }
+                seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_PASS);
+                seek_required = 0;
+                hex_scroll_row = 0;
+                max_scroll_rows = 0;
+                ui_redraw_required = 1;
+                ui_reset_hex_dump_panel();
+            }
+
+            if (!cmd_read_id(FDC_DRIVE, 0, &read_id_result)) {
+                sr_fail++;
+                seek_read_card_set_id_status(&card,
+                    read_id_failure_reason(read_id_result.status.st1,
+                                           read_id_result.status.st2));
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                seek_required = 1;
+                ui_redraw_required = 0;
+                delay_ms(20);
+                continue;
+            }
+
+            sector_data_len = sector_size_from_n(read_id_result.chrn.n);
+            if (sector_data_len == 0 || sector_data_len > sizeof(sector_data)) {
+                sr_fail++;
+                seek_read_card_set_id_status(&card, "BAD N");
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                seek_required = 1;
+                ui_redraw_required = 0;
+                delay_ms(20);
+                continue;
+            }
+            {
+                unsigned int total_rows = (sector_data_len + 7U) / 8U;
+                max_scroll_rows = total_rows > 13U ? total_rows - 13U : 0U;
+                if (hex_scroll_row > max_scroll_rows) hex_scroll_row = max_scroll_rows;
+            }
+
+            if (!cmd_read_data(FDC_DRIVE, read_id_result.chrn.h,
+                               read_id_result.chrn.c, read_id_result.chrn.h,
+                               read_id_result.chrn.r, read_id_result.chrn.n,
+                               &read_data_result, sector_data,
+                               sector_data_len)) {
+                sr_fail++;
+                seek_read_card_set_id_status(&card,
+                    read_id_failure_reason(read_data_result.status.st1,
+                                           read_data_result.status.st2));
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
+                seek_required = 1;
+                ui_redraw_required = 0;
+                delay_ms(20);
+                continue;
+            }
+
+            sr_pass++;
+            seek_read_card_set_id_chrn(&card, read_id_result.chrn.c,
+                                        read_id_result.chrn.h,
+                                        read_id_result.chrn.r,
+                                        read_id_result.chrn.n);
+            seek_read_card_set_counts(&card, sr_pass, sr_fail);
+            seek_read_card_render(&card, TEST_CARD_RESULT_ACTIVE);
+            ui_set_hex_dump_scroll(hex_scroll_row);
+            ui_render_hex_dump_panel(sector_data, sector_data_len);
+            ui_redraw_required = 0;
+
+            delay_ms((unsigned int)(READ_LOOP_PAUSE_STEPS * READ_LOOP_PAUSE_MS));
+            continue;
+        }
+
+        motor_off();
+        disk_operations_set_idle_pump(0);
+        ui_set_idle_pump(0);
+        seek_read_card_set_counts(&card, sr_pass, sr_fail);
+        seek_read_card_render(&card, TEST_CARD_RESULT_STOPPED);
+        results.seek_read_pass = (unsigned char)(sr_fail == 0 && sr_pass > 0);
+        last_test_failed = (unsigned char)(results.seek_read_pass == 0);
+        return;
+    }
+
+    /* --- RunAll mode: fixed seek pattern 0 → 39 → 0 → 79 → 0 --- */
+    seek_read_card_init(&card, single_shot_test_controls(0));
 
     if (show_live_card) {
-        reset_recal_seek(&recal_seek_card);
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_READY);
+        seek_read_card_render(&card, TEST_CARD_RESULT_READY);
         delay_ms(TEST_CARD_STATE_DELAY_MS);
-        set_recal_status_running(&recal_seek_card);
-        set_seek_status_pending(&recal_seek_card);
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_RUNNING);
+        seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_RUNNING);
+        seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
     }
 
     motor_on();
 
-    if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-        set_recal_seek_ready_fail_st3(&recal_seek_card, st3);
-        set_recal_status_skipped(&recal_seek_card);
-        set_seek_status_skipped(&recal_seek_card);
-        set_detail_check_media(&recal_seek_card);
-        results.recalibrate_pass = 0;
-        results.seek_pass = 0;
-        motor_off();
-        last_test_failed = 1;
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
-        return;
-    }
-    set_ready_yes(&recal_seek_card);
-    if (!cmd_recalibrate(FDC_DRIVE)) {
-        set_recal_status_fail(&recal_seek_card);
-        set_seek_status_skipped(&recal_seek_card);
-        set_detail_recal_cmd_fail(&recal_seek_card);
-        results.recalibrate_pass = 0;
-        results.seek_pass = 0;
+    if (!wait_drive_ready(FDC_DRIVE, 0, &drive_status_st3)) {
+        seek_read_card_set_ready_fail_st3(&card, drive_status_st3);
+        results.seek_read_pass = 0;
         last_test_failed = 1;
         motor_off();
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
+        seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
         return;
     }
-    if (!wait_seek_complete(FDC_DRIVE, &seek_result)) {
-        set_recal_status_fail(&recal_seek_card);
-        set_seek_status_skipped(&recal_seek_card);
-        set_detail_st0_pcn(&recal_seek_card, seek_result.st0, seek_result.pcn);
-        results.recalibrate_pass = 0;
-        results.seek_pass = 0;
-        last_test_failed = 1;
-        motor_off();
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
-        return;
-    }
-    recal_ok = seek_completion_ok(seek_result.st0);
+    seek_read_card_set_ready(&card, 1);
 
-    if (recal_ok) {
-        set_recal_status_pass(&recal_seek_card);
-    }
-    else {
-        set_recal_status_fail(&recal_seek_card);
-    }
-
-    if (!cmd_seek(FDC_DRIVE, 0, track_target)) {
-        set_ready_yes(&recal_seek_card);
-        set_seek_status_fail(&recal_seek_card);
-        set_detail_seek_cmd_fail(&recal_seek_card);
-        results.recalibrate_pass = recal_ok;
-        results.seek_pass = 0;
+    if (!recalibrate_track0_strict(&seek_result)) {
+        seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_FAIL);
+        results.seek_read_pass = 0;
         last_test_failed = 1;
         motor_off();
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
+        seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
         return;
     }
-    if (!wait_seek_complete(FDC_DRIVE, &seek_result)) {
-        set_ready_yes(&recal_seek_card);
-        set_seek_status_fail(&recal_seek_card);
-        set_detail_st0_pcn(&recal_seek_card, seek_result.st0, seek_result.pcn);
-        results.recalibrate_pass = recal_ok;
-        results.seek_pass = 0;
-        last_test_failed = 1;
-        motor_off();
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
-        return;
+    recal_ok = 1;
+    seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_PASS);
+
+    {
+        unsigned char i;
+        for (i = 0; i < SEEK_PATTERN_LEN; i++) {
+            unsigned char target = seek_pattern[i];
+            seek_read_card_set_track(&card, target);
+            seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_RUNNING);
+            seek_read_card_set_counts(&card, sr_pass, sr_fail);
+            if (show_live_card) seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
+
+            if (!cmd_seek(FDC_DRIVE, 0, target) ||
+                !wait_seek_complete(FDC_DRIVE, &seek_result) ||
+                !seek_completion_ok(seek_result.st0)) {
+                seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_FAIL);
+                sr_fail++;
+                any_seek_fail = 1;
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                if (show_live_card) seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
+                continue;
+            }
+            seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_PASS);
+
+            if (!cmd_read_id(FDC_DRIVE, 0, &read_id_result)) {
+                seek_read_card_set_id_status(&card, "RID FAIL");
+                sr_fail++;
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                if (show_live_card) seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
+                continue;
+            }
+
+            sector_data_len = sector_size_from_n(read_id_result.chrn.n);
+            if (sector_data_len == 0 || sector_data_len > sizeof(sector_data)) {
+                sr_fail++;
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                continue;
+            }
+
+            if (!cmd_read_data(FDC_DRIVE, read_id_result.chrn.h,
+                               read_id_result.chrn.c, read_id_result.chrn.h,
+                               read_id_result.chrn.r, read_id_result.chrn.n,
+                               &read_data_result, sector_data,
+                               sector_data_len)) {
+                seek_read_card_set_id_status(&card, "READ FAIL");
+                sr_fail++;
+                seek_read_card_set_counts(&card, sr_pass, sr_fail);
+                if (show_live_card) seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
+                continue;
+            }
+
+            sr_pass++;
+            seek_read_card_set_id_chrn(&card, read_id_result.chrn.c,
+                                        read_id_result.chrn.h,
+                                        read_id_result.chrn.r,
+                                        read_id_result.chrn.n);
+            seek_read_card_set_counts(&card, sr_pass, sr_fail);
+            if (show_live_card) seek_read_card_render(&card, TEST_CARD_RESULT_RUNNING);
+        }
     }
 
-    results.recalibrate_pass = recal_ok;
-    results.seek_pass = seek_completion_ok(seek_result.st0);
+    results.seek_read_pass = (unsigned char)(recal_ok && !any_seek_fail && sr_fail == 0);
+    last_test_failed = (unsigned char)(results.seek_read_pass == 0);
     motor_off();
-    /* Avoid && in ternary: SCCZ80 seems to miscompile or not evaluate correctly
-     * in this context things like (a && b) ? X : Y
-     * when a and b are struct members. Use explicit if-else instead. */
-    last_test_failed = 0;
-    if (recal_ok == 0U) last_test_failed = 1;
-    if (results.seek_pass == 0U) last_test_failed = 1;
-    if (recal_ok != 0U) {
-        set_recal_status_pass(&recal_seek_card);
-    }
-    else {
-        set_recal_status_fail(&recal_seek_card);
-    }
-    if (results.seek_pass != 0U) {
-        set_seek_status_pass(&recal_seek_card);
-    }
-    else {
-        set_seek_status_fail(&recal_seek_card);
-    }
-    set_detail_track(&recal_seek_card, seek_result.pcn);
-    if (last_test_failed != 0U) {
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_FAIL);
-    }
-    else {
-        render_recal_seek(&recal_seek_card, TEST_CARD_RESULT_PASS);
-    }
+    seek_read_card_render(&card, results.seek_read_pass
+                          ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
 }
+
 
 static void interactive_seek_fail(const InteractiveSeekCard *card) {
     motor_off();
@@ -707,153 +794,6 @@ static void test_seek_interactive(void) {
     }
 }
 
-static void test_read_id(int interactive) {
-    FdcResult rid_result;
-    unsigned char st3 = 0;
-    unsigned char show_live_card = show_selected_test_cards();
-    ReadIdCard read_id_card;
-    (void) interactive;
-
-    last_test_failed = 0;
-    results.read_id_ran = 1;
-    read_id_card_init(&read_id_card, single_shot_test_controls(0));
-
-    if (show_live_card) {
-        reset_read_id(&read_id_card);
-        render_read_id(&read_id_card, TEST_CARD_RESULT_READY);
-        delay_ms(TEST_CARD_STATE_DELAY_MS);
-        set_reading(&read_id_card);
-        render_read_id(&read_id_card, TEST_CARD_RESULT_RUNNING);
-    }
-
-    motor_on();
-
-    if (!wait_drive_ready(FDC_DRIVE, 0, &st3)) {
-        set_drive_not_ready(&read_id_card, st3);
-        results.read_id_pass = 0;
-        motor_off();
-        last_test_failed = 1;
-        render_read_id(&read_id_card, TEST_CARD_RESULT_FAIL);
-        return;
-    }
-
-    /* Try to get to track 0 first — abort if RECAL fails */
-    {
-        FdcSeekResult recal_result;
-        if (!recalibrate_track0_strict(&recal_result)) {
-            set_detail_failure(&read_id_card, "RECAL FAIL");
-            results.read_id_pass = 0;
-            last_test_failed = 1;
-            motor_off();
-            render_read_id(&read_id_card, TEST_CARD_RESULT_FAIL);
-            return;
-        }
-    }
-
-    unsigned char ok = cmd_read_id(FDC_DRIVE, 0, &rid_result);
-
-    set_status(&read_id_card, rid_result.status.st0, rid_result.status.st1,
-               rid_result.status.st2);
-    if (ok) {
-        set_chrn_valid(&read_id_card, rid_result.chrn.c, rid_result.chrn.h,
-                       rid_result.chrn.r, rid_result.chrn.n);
-        set_detail_id_ok(&read_id_card);
-    }
-    else {
-        set_chrn_invalid(&read_id_card);
-        set_detail_failure(&read_id_card,
-                           read_id_failure_reason(rid_result.status.st1,
-                               rid_result.status.st2));
-    }
-
-    results.read_id_pass = ok;
-    last_test_failed = (unsigned char) (ok == 0);
-    motor_off();
-    render_read_id(&read_id_card,
-                   ok ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_active(unsigned char track,
-                                     unsigned int pass_count,
-                                     unsigned int fail_count) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_active(&card);
-    render_track_loop(&card, TEST_CARD_RESULT_ACTIVE);
-}
-
-static void render_track_loop_drive_not_ready(unsigned char track,
-                                              unsigned int pass_count,
-                                              unsigned int fail_count,
-                                              unsigned char st3) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_drive_not_ready(&card, st3);
-    render_track_loop(&card, TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_seek_fail(unsigned char track,
-                                        unsigned int pass_count,
-                                        unsigned int fail_count,
-                                        unsigned char st0) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_seek_fail(&card, track, st0);
-    render_track_loop(&card, TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_read_id_fail(unsigned char track,
-                                           unsigned int pass_count,
-                                           unsigned int fail_count,
-                                           const char *reason) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_read_id_fail(&card, track, reason);
-    render_track_loop(&card, TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_bad_sector_size(unsigned char track,
-                                              unsigned int pass_count,
-                                              unsigned int fail_count,
-                                              unsigned char size_code) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_bad_sector_size(&card, size_code);
-    render_track_loop(&card, TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_read_fail(unsigned char track,
-                                        unsigned int pass_count,
-                                        unsigned int fail_count,
-                                        const char *reason) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_read_fail(&card, track, reason);
-    render_track_loop(&card, TEST_CARD_RESULT_FAIL);
-}
-
-static void render_track_loop_stopped(unsigned char track,
-                                      unsigned int pass_count,
-                                      unsigned int fail_count) {
-    TrackLoopCard card;
-    track_loop_card_init(&card);
-    set_track_loop_track(&card, track);
-    set_track_loop_counts(&card, pass_count, fail_count);
-    track_loop_card_set_stopped(&card);
-    render_track_loop(&card, TEST_CARD_RESULT_STOPPED);
-}
 
 static void render_rpm_loop_drive_not_ready(unsigned int rpm,
                                             unsigned int pass_count,
@@ -927,155 +867,8 @@ static void render_rpm_loop_stopped(unsigned int rpm,
     render_rpm_loop(&card, TEST_CARD_RESULT_STOPPED);
 }
 
-static void test_read_track_data_loop(void) {
-    static unsigned char sector_data[1024];
-    FdcResult read_id_result;
-    FdcResult read_data_result;
-    FdcSeekResult seek_result;
-    unsigned char current_track = 0;
-    unsigned char seek_required = 1;
-    unsigned char recal_required = 1;
-    unsigned char drive_status_st3 = 0;
-    unsigned int pass_count = 0;
-    unsigned int fail_count = 0;
-    unsigned int sector_data_len = 0;
-    unsigned char hex_scroll_row = 0;
-    unsigned char max_scroll_rows = 0;
-    unsigned char ui_redraw_required = 1;
 
-    seek_result.st0 = 0;
-    seek_result.pcn = 0;
-
-    last_test_failed = 0;
-    memset(runtime_key_latched, 0, sizeof(runtime_key_latched));
-    runtime_pending_key = 0;
-    disk_operations_set_idle_pump(pump_runtime_key_latch);
-    ui_set_idle_pump(pump_runtime_key_latch);
-
-    motor_on();
-
-    for (;;) {
-        unsigned char seek_fail_st0 = 0;
-
-        /* Pump once, then handle hex-panel scroll before track nav. */
-        pump_runtime_key_latch();
-        if (runtime_pending_key == 'F') {
-            runtime_pending_key = 0;
-            if (hex_scroll_row > 0U) hex_scroll_row--;
-        } else if (runtime_pending_key == 'V') {
-            runtime_pending_key = 0;
-            if (hex_scroll_row < max_scroll_rows) hex_scroll_row++;
-        }
-
-        if (track_loop_consume_action(&current_track, &seek_required,
-                                      &ui_redraw_required)) {
-            break;
-        }
-
-        if (ui_redraw_required) {
-            render_track_loop_active(current_track, pass_count, fail_count);
-            ui_redraw_required = 0;
-        }
-
-        if (!wait_drive_ready(FDC_DRIVE, 0, &drive_status_st3)) {
-            fail_count++;
-            render_track_loop_drive_not_ready(current_track, pass_count,
-                                              fail_count, drive_status_st3);
-            seek_required = 1;
-            recal_required = 1;
-            ui_redraw_required = 0;
-            delay_ms(20);
-            continue;
-        }
-
-        if (seek_required) {
-            if (recal_required) {
-                FdcSeekResult recal_result;
-                if (!recalibrate_track0_strict(&recal_result)) {
-                    seek_fail_st0 = recal_result.st0;
-                    goto track_seek_fail;
-                }
-                recal_required = 0;
-            }
-            if (!cmd_seek(FDC_DRIVE, 0, current_track) ||
-                !wait_seek_complete(FDC_DRIVE, &seek_result)) {
-                seek_fail_st0 = seek_result.st0;
-                goto track_seek_fail;
-            }
-            seek_required = 0;
-            hex_scroll_row = 0;
-            max_scroll_rows = 0;
-            ui_redraw_required = 1;
-            /* Moved to a different track — old hex dump data is stale. */
-            ui_reset_hex_dump_panel();
-        }
-
-        if (!cmd_read_id(FDC_DRIVE, 0, &read_id_result)) {
-            fail_count++;
-            render_track_loop_read_id_fail(
-                current_track, pass_count, fail_count,
-                read_id_failure_reason(read_id_result.status.st1,
-                                       read_id_result.status.st2));
-            goto track_retry_fail;
-        }
-
-        sector_data_len = sector_size_from_n(read_id_result.chrn.n);
-        if (sector_data_len == 0 || sector_data_len > sizeof(sector_data)) {
-            fail_count++;
-            render_track_loop_bad_sector_size(current_track, pass_count,
-                                              fail_count, read_id_result.chrn.n);
-            goto track_retry_fail;
-        }
-        {
-            unsigned int total_rows = (sector_data_len + 7U) / 8U;
-            max_scroll_rows = total_rows > 13U ? total_rows - 13U : 0U;
-            if (hex_scroll_row > max_scroll_rows) hex_scroll_row = max_scroll_rows;
-        }
-
-        if (!cmd_read_data(FDC_DRIVE, read_id_result.chrn.h,
-                           read_id_result.chrn.c, read_id_result.chrn.h,
-                           read_id_result.chrn.r, read_id_result.chrn.n,
-                           &read_data_result, sector_data,
-                           sector_data_len)) {
-            fail_count++;
-            render_track_loop_read_fail(
-                current_track, pass_count, fail_count,
-                read_id_failure_reason(read_data_result.status.st1,
-                                       read_data_result.status.st2));
-            goto track_retry_fail;
-        }
-
-        pass_count++;
-
-        render_track_loop_active(current_track, pass_count, fail_count);
-        ui_set_hex_dump_scroll(hex_scroll_row);
-        ui_render_hex_dump_panel(sector_data, sector_data_len);
-        ui_redraw_required = 0;
-
-        /* Short pause: track_loop_consume_action at the next iteration
-         * will catch any pending J/K/X key after the delay. */
-        delay_ms((unsigned int)(READ_LOOP_PAUSE_STEPS * READ_LOOP_PAUSE_MS));
-        continue;
-
-track_seek_fail:
-        fail_count++;
-        render_track_loop_seek_fail(current_track, pass_count,
-                                    fail_count, seek_fail_st0);
-track_retry_fail:
-        seek_required = 1;
-        ui_redraw_required = 0;
-        delay_ms(20);
-        continue;
-    }
-
-    motor_off();
-    disk_operations_set_idle_pump(0);
-    ui_set_idle_pump(0);
-    render_track_loop_stopped(current_track, pass_count, fail_count);
-    last_test_failed = (unsigned char) (fail_count > 0);
-}
-
-static void test_rpm_checker(void) {
+static void test_rpm_checker(int interactive) {
     FdcSeekResult seek_result;
     unsigned int rpm = 0;
     unsigned int pass_count = 0;
@@ -1090,11 +883,13 @@ static void test_rpm_checker(void) {
     seek_result.pcn = 0;
 
     last_test_failed = 0;
+    results.rpm_ran = 1;
 
     motor_on();
     loop_start_tick = frame_ticks();
 
-    while (!(rpm_exit_armed(loop_start_tick) && loop_exit_requested())) {
+    while (!(rpm_exit_armed(loop_start_tick) && loop_exit_requested()) &&
+           !(!interactive && (pass_count + fail_count) >= 1U)) {
         unsigned int period_ms;
         unsigned char sample_error;
 
@@ -1183,6 +978,7 @@ static void test_rpm_checker(void) {
 rpm_done:
     motor_off();
     render_rpm_loop_stopped(rpm, pass_count, fail_count);
+    results.rpm_pass = (unsigned char)(pass_count > 0 && fail_count == 0);
     last_test_failed = (unsigned char)(fail_count > 0);
 }
 
@@ -1193,10 +989,9 @@ rpm_done:
 typedef void (*TestFunc)(int interactive);
 
 static const TestFunc run_all_test_list[] = {
-    test_motor_and_drive_status,
-    test_read_id_probe,
-    test_recal_seek_track2,
-    test_read_id,
+    test_drive_probe,
+    test_seek_and_read,
+    test_rpm_checker,
 };
 
 enum {
@@ -1277,17 +1072,12 @@ int main(void) {
 
         switch (ch) {
             case 'M':
-                test_motor_and_drive_status(1);
+                test_drive_probe(1);
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;
             case 'E':
-                test_read_id_probe(1);
-                wait_after_test_run(1);
-                menu_dirty = 1;
-                break;
-            case 'B':
-                test_recal_seek_track2(1);
+                test_seek_and_read(1);
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;
@@ -1296,18 +1086,8 @@ int main(void) {
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;
-            case 'T':
-                test_read_id(1);
-                wait_after_test_run(1);
-                menu_dirty = 1;
-                break;
-            case 'D':
-                test_read_track_data_loop();
-                wait_after_test_run(1);
-                menu_dirty = 1;
-                break;
             case 'H':
-                test_rpm_checker();
+                test_rpm_checker(1);
                 wait_after_test_run(1);
                 menu_dirty = 1;
                 break;

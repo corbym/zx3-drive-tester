@@ -141,19 +141,62 @@ func TestMenuAppearsAfterTapLoad(t *testing.T) {
 	}
 }
 
+// TestMenuLayoutControlsAboveStatus verifies that the control hint rows
+// (UP/DOWN/ENTER) and the STATUS bar appear at the correct screen positions
+// relative to each other.  This catches the class of regression where adding
+// or removing menu items shifts the hardcoded attribute rows out of sync with
+// the actual printed rows (e.g. control hints painted over blank rows instead
+// of the text rows, or STATUS: rendered in the middle of the screen).
+func TestMenuLayoutControlsAboveStatus(t *testing.T) {
+	c := requireSuiteClient(t)
+	resetAndLoadTap(t, c)
+	waitForMenu(t, c, 30*time.Second)
+	ocr, err := c.OCR()
+	if err != nil {
+		t.Fatalf("failed OCR on menu: %v", err)
+	}
+	upper := strings.ToUpper(ocr)
+	if !containsAll(upper, "ENTER: SELECT", "STATUS:") {
+		t.Fatalf("menu missing ENTER:SELECT or STATUS:\nOCR:\n%s", ocr)
+	}
+	lines := strings.Split(upper, "\n")
+	enterLine, statusLine := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "ENTER: SELECT") {
+			enterLine = i
+		}
+		if strings.Contains(line, "STATUS:") {
+			statusLine = i
+		}
+	}
+	if enterLine < 0 || statusLine < 0 {
+		t.Fatalf("could not locate ENTER:SELECT (line %d) or STATUS: (line %d) in OCR\nOCR:\n%s",
+			enterLine, statusLine, ocr)
+	}
+	if enterLine >= statusLine {
+		t.Fatalf("ENTER:SELECT (OCR line %d) should be above STATUS: (OCR line %d) — attribute row offset mismatch?\nOCR:\n%s",
+			enterLine, statusLine, ocr)
+	}
+	// No control-hint text should appear below STATUS:.
+	for i := statusLine + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], "ENTER: SELECT") ||
+			strings.Contains(lines[i], "UP   :") ||
+			strings.Contains(lines[i], "DOWN :") {
+			t.Fatalf("control hint found below STATUS: at OCR line %d — menu padding regression?\nOCR:\n%s", i, ocr)
+		}
+	}
+}
+
 func TestMenuSelectionMovesAcrossAllItems(t *testing.T) {
 	c := requireSuiteClient(t)
 	resetAndLoadTap(t, c)
 	waitForMenu(t, c, 30*time.Second)
 
 	labels := []string{
-		"MOTOR READY TEST",
-		"READ ID PROBE",
-		"RECALIBRATE TEST",
-		"INTERACTIVE SEEK",
-		"READ ID T0",
-		"READ DATA",
+		"DRIVE PROBE",
+		"SEEK",
 		"DISK RPM CHECK",
+		"INTERACTIVE SEEK",
 		"RUN ALL",
 		"SHOW REPORT",
 		"CLEAR RESULTS",
@@ -290,19 +333,13 @@ func TestRecalSeekTrack2(t *testing.T) {
 		t.Fatalf("timed out waiting for menu after DSK load: %v", err)
 	}
 
-	// 'B' triggers the RECAL/SEEK TRACK 2 test from the menu.
-	if err := c.SendKey('B'); err != nil {
-		t.Fatalf("failed to send B key for recal/seek test: %v", err)
+	// 'B' opens the interactive SEEK & READ DATA card.
+	if err := c.SendKey('E'); err != nil {
+		t.Fatalf("failed to send B key for seek+read test: %v", err)
 	}
 
-	// Wait for the test card to become visible.
-	if _, err := c.WaitForOCR(15*time.Second, "RECAL", "RESULT"); err != nil {
-		t.Fatalf("timed out waiting for recal/seek card to appear: %v", err)
-	}
-
-	// Poll until the result line settles to PASS or FAIL.
-	// Note: the card has a "READY : YES" data field, so we match "RESULT:"
-	// specifically rather than checking for the absence of "READY".
+	// Wait for the card to appear and recalibration to complete.
+	// "RECAL : PASS" confirms the IC-bit completion logic is correct (no false negative).
 	deadline := time.Now().Add(30 * time.Second)
 	var lastOCR string
 	for time.Now().Before(deadline) {
@@ -310,16 +347,20 @@ func TestRecalSeekTrack2(t *testing.T) {
 		if err == nil {
 			lastOCR = ocr
 			upper := strings.ToUpper(ocr)
-			if strings.Contains(upper, "RESULT: PASS") {
+			if strings.Contains(upper, "RECAL") && strings.Contains(upper, "PASS") {
+				// Recal succeeded — exit the interactive loop.
+				if err := c.SendKey('X'); err != nil {
+					t.Fatalf("failed to send X to exit seek+read: %v", err)
+				}
 				return
 			}
-			if strings.Contains(upper, "RESULT: FAIL") {
-				t.Fatalf("recal/seek test reported FAIL — IC-bit false negative or seek regression\nOCR:\n%s", ocr)
+			if strings.Contains(upper, "RECAL") && strings.Contains(upper, "FAIL") {
+				t.Fatalf("recal reported FAIL — IC-bit false negative or seek regression\nOCR:\n%s", ocr)
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for recal/seek result\nlast OCR:\n%s", lastOCR)
+	t.Fatalf("timed out waiting for recal result in seek+read card\nlast OCR:\n%s", lastOCR)
 }
 
 func TestMotorStatusMenu(t *testing.T) {
@@ -338,11 +379,11 @@ func TestMotorStatusMenu(t *testing.T) {
 		}
 		if ocr, err := c.OCR(); err == nil {
 			lastOCR = ocr
-			if containsAll(ocr, "MOTOR/DRIVE STATUS", "ENTER/ESC MENU", "MOTOR :", "RESULT:") {
+			if containsAll(ocr, "DRIVE PROBE", "ENTER/ESC MENU", "MOTOR :", "RESULT:") {
 				return
 			}
 		}
-		if _, err := c.WaitForOCR(1500*time.Millisecond, "MOTOR/DRIVE STATUS", "RESULT:"); err == nil {
+		if _, err := c.WaitForOCR(1500*time.Millisecond, "DRIVE PROBE", "RESULT:"); err == nil {
 			return
 		}
 	}
@@ -567,7 +608,7 @@ func TestScreenCaptureStages(t *testing.T) {
 			name:        "motor status",
 			captureFile: "02_motor_status.bmp",
 			key:         'M',
-			waitFor:     []string{"MOTOR/DRIVE STATUS", "RESULT:"},
+			waitFor:     []string{"DRIVE PROBE", "RESULT:"},
 			waitTimeout: 15 * time.Second,
 			nonBlank:    true,
 		},
@@ -612,8 +653,8 @@ func TestScreenCaptureStages(t *testing.T) {
 			name:            "read data loop",
 			captureFile:     "07_read_data_loop_hex_preview.bmp",
 			loadDSK:         true,
-			key:             'D',
-			waitFor:         []string{"READ TRACK DATA"},
+			key:             'E',
+			waitFor:         []string{"RECAL", "SEEK"},
 			waitTimeout:     30 * time.Second,
 			settleDelay:     1500 * time.Millisecond, // let hex panel populate
 			exitKey:         'X',

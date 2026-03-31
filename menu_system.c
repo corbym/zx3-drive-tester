@@ -8,26 +8,20 @@
 extern unsigned char inportb(unsigned short port);
 #if HEADLESS_ROM_FONT
 static const MenuItem MENU_ITEMS[] = {
-    {'M', "Motor ready test", 0},
-    {'E', "Read ID Probe", 1},
-    {'B', "Recalibrate test", 6},
-    {'I', "Interactive seek", 0},
-    {'T', "Read ID T0", 8},
-    {'D', "Read data", 5},
+    {'M', "Drive probe", 0},
+    {'E', "Seek & read data", 1},
     {'H', "Disk RPM check", 10},
+    {'I', "Interactive seek", 0},
     {'A', "Run all", 4},
     {'R', "Show report", 5},
     {'C', "Clear results", 0},
 };
 #elif HEADLESS_ROM_FONT == 0
 static const MenuItem MENU_ITEMS[] = {
-    {'M', "MOTOR READY TEST", 0},
-    {'E', "READ ID PROBE", 1},
-    {'B', "RECALIBRATE TEST", 6},
-    {'I', "INTERACTIVE SEEK", 0},
-    {'T', "READ ID T0", 8},
-    {'D', "READ DATA", 5},
+    {'M', "DRIVE PROBE", 0},
+    {'E', "SEEK & READ DATA", 1},
     {'H', "DISK RPM CHECK", 10},
+    {'I', "INTERACTIVE SEEK", 0},
     {'A', "RUN ALL", 4},
     {'R', "SHOW REPORT", 5},
     {'C', "CLEAR RESULTS", 0},
@@ -40,13 +34,10 @@ static const KeyMap menu_keymap[] = {
     {0xFDFE, 0x01, 'A'},
     {0x7FFE, 0x08, 'C'},
     {0xFBFE, 0x08, 'R'},
-    {0xFDFE, 0x04, 'D'},
-    {0xFBFE, 0x10, 'T'},
     {0x7FFE, 0x04, 'M'},
     {0xDFFE, 0x04, 'I'},
     {0xBFFE, 0x10, 'H'},
     {0xFBFE, 0x04, 'E'},
-    {0x7FFE, 0x10, 'B'},
 };
 
 enum { MENU_KEYMAP_COUNT = sizeof(menu_keymap) / sizeof(menu_keymap[0]) };
@@ -251,7 +242,7 @@ static void menu_status_value_text(char *out, unsigned char total_pass) {
         strcpy(out, "NOT RUN");
     }
     else {
-        sprintf(out, "%u/5 PASS", (unsigned int) total_pass);
+        sprintf(out, "%u/3 PASS", (unsigned int) total_pass);
     }
 }
 
@@ -278,14 +269,23 @@ void menu_render_full(unsigned char selected_index, unsigned char total_pass) {
     printf("\n\nUP   : F/CAPS+7\n");
     printf("DOWN : V/CAPS+6\n");
     printf("ENTER: SELECT  Q: QUIT\n");
-    printf("\n\n\n\n\n\n\nSTATUS: %s", status_value);
+    /* Pad dynamically to reach row 23 regardless of menu item count.
+     * After ENTER's \n cursor is at row count+6; 17-count more \n reach row 23. */
+    {
+        unsigned char pad = (unsigned char)(17U - count);
+        unsigned char p;
+        for (p = 0; p < pad; p++) { printf("\n"); }
+    }
+    printf("STATUS: %s", status_value);
 
-    /* Reapply +3-style colour layout on top of terminal text output. */
+    /* Reapply +3-style colour layout on top of terminal text output.
+     * Control-hint rows are at count+3/+4/+5 (2 blank rows after items, then 3
+     * control lines). These are computed from count so they track item count. */
     ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
     ui_attr_set_run(0, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
-    ui_attr_set_run(13, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
-    ui_attr_set_run(14, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
-    ui_attr_set_run(15, 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run((unsigned char)(count + 3U), 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run((unsigned char)(count + 4U), 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
+    ui_attr_set_run((unsigned char)(count + 5U), 0, 32, ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 1);
     ui_attr_set_run(23, 0, 32, ZX_COLOUR_WHITE, ZX_COLOUR_BLUE, 1);
     for (col = 0; col < 8; col++) {
         ui_attr_set_cell(0, (unsigned char) (24 + col),
