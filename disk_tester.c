@@ -568,7 +568,7 @@ static void test_seek_and_read(int interactive) {
             }
             {
                 unsigned int total_rows = (sector_data_len + 7U) / 8U;
-                max_scroll_rows = total_rows > 13U ? total_rows - 13U : 0U;
+                max_scroll_rows = total_rows > 12U ? total_rows - 12U : 0U;
                 if (hex_scroll_row > max_scroll_rows) hex_scroll_row = max_scroll_rows;
             }
 

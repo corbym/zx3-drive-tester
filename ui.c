@@ -547,11 +547,11 @@ void ui_render_text_screen(const char* title, const char* controls,
 }
 
 /* ----------------------------------------------------------------------- */
-/* Hex dump panel (rows 10-23 below the card area)                          */
+/* Hex dump panel (rows 10-22 below the card area; row 23 = status bar)    */
 /* ----------------------------------------------------------------------- */
 
 #define HEX_DUMP_HEADER_ROW    10U
-#define HEX_DUMP_DATA_ROWS     13U
+#define HEX_DUMP_DATA_ROWS     12U
 
 static const char s_hex_digits[17] = "0123456789ABCDEF";
 
