@@ -102,21 +102,21 @@ func TestCommandGapConstantUsesCalibratedUnitsNaming(t *testing.T) {
 	}
 }
 
-func TestRecalSeekTrack2SeparatesSeekCommandAndCompletionFailures(t *testing.T) {
+func TestSeekInteractiveSeparatesSeekCommandAndCompletionFailures(t *testing.T) {
 	src := loadDiskTesterSource(t)
-	body := extractRenderFuncBody(t, src, `static\s+void\s+test_recal_seek_track2\(int interactive`)
+	body := extractRenderFuncBody(t, src, `static\s+void\s+test_seek_interactive\(void`)
 
-	if !strings.Contains(body, "if (!cmd_seek(FDC_DRIVE, 0, track_target))") {
-		t.Fatalf("expected separate cmd_seek failure branch in test_recal_seek_track2")
+	if !strings.Contains(body, "if (!cmd_seek(FDC_DRIVE, 0, target))") {
+		t.Fatalf("expected separate cmd_seek failure branch in test_seek_interactive")
 	}
-	if !strings.Contains(body, "set_detail_seek_cmd_fail(&recal_seek_card);") {
-		t.Fatalf("expected explicit seek command failure detail in test_recal_seek_track2")
+	if !strings.Contains(body, "set_last_seek_cmd_fail(&interactive_seek_card);") {
+		t.Fatalf("expected explicit seek command failure detail in test_seek_interactive")
 	}
 	if !strings.Contains(body, "if (!wait_seek_complete(FDC_DRIVE, &seek_result))") {
-		t.Fatalf("expected separate wait_seek_complete failure branch in test_recal_seek_track2")
+		t.Fatalf("expected separate wait_seek_complete failure branch in test_seek_interactive")
 	}
-	if !strings.Contains(body, "set_detail_st0_pcn(&recal_seek_card, seek_result.st0, seek_result.pcn);") {
-		t.Fatalf("expected seek-complete failure to preserve ST0/PCN detail")
+	if !strings.Contains(body, "set_pcn(&interactive_seek_card, seek_result.pcn);") {
+		t.Fatalf("expected seek-complete failure to preserve PCN detail in test_seek_interactive")
 	}
 }
 
