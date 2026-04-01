@@ -61,19 +61,38 @@ static void test_card_set_controls(TestCard *card, const char *controls) {
 
 static void test_card_set_line(TestCard *card, unsigned char row,
                                const char *text) {
+    const char *safe_text;
     if (row >= card->line_count) return;
-    strncpy(card->text[row], text ? text : "", (size_t)(TEST_CARD_LINE_LEN - 1U));
+    if (text) {
+        safe_text = text;
+    } else {
+        safe_text = "";
+    }
+    strncpy(card->text[row], safe_text, (size_t)(TEST_CARD_LINE_LEN - 1U));
     card->text[row][TEST_CARD_LINE_LEN - 1U] = '\0';
 }
 
 static void test_card_set_labeled_value(TestCard *card, unsigned char row,
                                         const char *label, const char *value,
                                         const char *fallback_value) {
-    const char *safe_label = label ? label : "";
-    const char *safe_value = value ? value : (fallback_value ? fallback_value : "");
+    const char *safe_label;
+    const char *safe_value;
     unsigned char label_len = 0U;
 
     if (row >= card->line_count) return;
+
+    if (label) {
+        safe_label = label;
+    } else {
+        safe_label = "";
+    }
+    if (value) {
+        safe_value = value;
+    } else if (fallback_value) {
+        safe_value = fallback_value;
+    } else {
+        safe_value = "";
+    }
 
     while (safe_label[label_len] && label_len < (TEST_CARD_LINE_LEN - 1U)) {
         label_len++;
@@ -127,7 +146,10 @@ void test_card_render_result(const TestCard *card, TestCardResult result) {
 /* ----------------------------------------------------------------------- */
 
 static const char *yes_no_text(unsigned char flag) {
-    return flag ? "YES" : "NO";
+    if (flag) {
+        return "YES";
+    }
+    return "NO";
 }
 
 static const char *recal_seek_status_text(RecalSeekStatus status) {
@@ -167,9 +189,10 @@ static const char *report_card_state_text(ReportCardState state) {
 }
 
 static const char *report_card_controls_text(ReportCardPhase phase) {
-    return (phase == REPORT_CARD_PHASE_RUNNING)
-               ? "AUTO ADV"
-               : zx3_ctrl_enter_esc_menu;
+    if (phase == REPORT_CARD_PHASE_RUNNING) {
+        return "AUTO ADV";
+    }
+    return zx3_ctrl_enter_esc_menu;
 }
 
 static const char *report_card_result_text(ReportCardPhase phase) {
@@ -304,8 +327,13 @@ void drive_probe_card_init(DriveProbeCard *card, const char *controls) {
 }
 
 void drive_probe_card_set_motor(DriveProbeCard *card, unsigned char on) {
-    test_card_set_labeled_value(&card->base, 0U, LABEL_MOTOR,
-                                on ? "ON" : "OFF", "OFF");
+    const char *motor_text;
+    if (on) {
+        motor_text = "ON";
+    } else {
+        motor_text = "OFF";
+    }
+    test_card_set_labeled_value(&card->base, 0U, LABEL_MOTOR, motor_text, "OFF");
 }
 
 void drive_probe_card_set_st3(DriveProbeCard *card, unsigned char have_st3,
@@ -358,8 +386,14 @@ void seek_read_card_init(SeekReadCard *card, const char *controls) {
 }
 
 void seek_read_card_set_ready(SeekReadCard *card, unsigned char yes) {
+    const char *ready_text;
+    if (yes) {
+        ready_text = "YES";
+    } else {
+        ready_text = "NO";
+    }
     test_card_set_labeled_value(&card->base, 0U, LABEL_READY,
-                                yes ? "YES" : "NO", zx3_str_dash3);
+                                ready_text, zx3_str_dash3);
 }
 
 void seek_read_card_set_ready_fail_st3(SeekReadCard *card, unsigned char st3) {
@@ -459,8 +493,14 @@ void rpm_loop_card_set_seek_fail(RpmLoopCard *card) {
 
 void rpm_loop_card_set_no_measurement(RpmLoopCard *card,
                                       unsigned char seen_other) {
+    const char *info_text;
     rpm_loop_card_set_last_status(card, "RPM N/A");
-    rpm_loop_card_set_info_status(card, seen_other ? "NO MARK" : "SAME SEC");
+    if (seen_other) {
+        info_text = "NO MARK";
+    } else {
+        info_text = "SAME SEC";
+    }
+    rpm_loop_card_set_info_status(card, info_text);
 }
 
 void rpm_loop_card_set_sample_ready(RpmLoopCard *card) {

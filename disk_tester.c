@@ -52,7 +52,7 @@ static void motor_off(void) { plus3_motor_off(); ui_set_drive_motor(0); }
 #define TEST_CARD_STATE_DELAY_MS 190U
 #define RUN_ALL_READY_DELAY_MS 150U
 #define RUN_ALL_RUNNING_DELAY_MS 120U
-#define RUN_ALL_RESULT_DELAY_MS 1500U
+#define RUN_ALL_RESULT_DELAY_MS 700U
 
 #define RPM_FAIL_DELAY_MS 450U
 #define RPM_EXIT_ARM_DELAY_MS 1500U
@@ -152,7 +152,8 @@ static unsigned char any_report_test_ran(void) {
 static ReportCardState report_card_state_from_runpass(unsigned char ran,
                                                       unsigned char pass) {
     if (!ran) return REPORT_CARD_STATE_NOT_RUN;
-    return pass ? REPORT_CARD_STATE_PASS : REPORT_CARD_STATE_FAIL;
+    if (!pass) return REPORT_CARD_STATE_FAIL;
+    return REPORT_CARD_STATE_PASS;
 }
 
 static ReportCardPhase report_card_phase_from_status(unsigned char status) {
@@ -359,7 +360,10 @@ static unsigned char show_selected_test_cards(void) {
 }
 
 static const char *single_shot_test_controls(int interactive) {
-    return interactive ? zx3_ctrl_enter_esc_menu : NULL;
+    if (interactive) {
+        return zx3_ctrl_enter_esc_menu;
+    }
+    return NULL;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -424,8 +428,15 @@ static void test_drive_probe(int interactive) {
                                        read_id_failure_reason(rid_result.status.st1,
                                                                rid_result.status.st2));
     }
-    drive_probe_card_render(&card, results.probe_pass
-                            ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
+    {
+        TestCardResult probe_result;
+        if (results.probe_pass) {
+            probe_result = TEST_CARD_RESULT_PASS;
+        } else {
+            probe_result = TEST_CARD_RESULT_FAIL;
+        }
+        drive_probe_card_render(&card, probe_result);
+    }
 }
 
 /* Fixed seek pattern: 0 → 39 → 0 → 79 → 0 (tests full travel both ways) */
@@ -568,7 +579,11 @@ static void test_seek_and_read(int interactive) {
             }
             {
                 unsigned int total_rows = (sector_data_len + 7U) / 8U;
-                max_scroll_rows = total_rows > 12U ? total_rows - 12U : 0U;
+                if (total_rows > 12U) {
+                    max_scroll_rows = total_rows - 12U;
+                } else {
+                    max_scroll_rows = 0U;
+                }
                 if (hex_scroll_row > max_scroll_rows) hex_scroll_row = max_scroll_rows;
             }
 
@@ -708,8 +723,10 @@ static void test_seek_and_read(int interactive) {
     results.seek_read_pass = (unsigned char)(recal_ok && !any_seek_fail && sr_fail == 0);
     last_test_failed = (unsigned char)(results.seek_read_pass == 0);
     motor_off();
-    seek_read_card_render(&card, results.seek_read_pass
-                          ? TEST_CARD_RESULT_PASS : TEST_CARD_RESULT_FAIL);
+    if (results.seek_read_pass)
+        seek_read_card_render(&card, TEST_CARD_RESULT_PASS);
+    else
+        seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
 }
 
 
@@ -758,10 +775,14 @@ static void test_seek_interactive(void) {
 
             switch (ch) {
                 case 'J':
-                    target = target > 0 ? target - 1 : 0;
+                    if (target > 0) {
+                        target = target - 1;
+                    }
                     break;
                 case 'K':
-                    target = target < 39 ? target + 1 : 39;
+                    if (target < 39) {
+                        target = target + 1;
+                    }
                     break;
                 case 'Q':
                     motor_off();
@@ -832,15 +853,19 @@ static void render_rpm_loop_no_measurement(unsigned int rpm,
 static void render_rpm_loop_sample(unsigned int rpm,
                                    unsigned int pass_count,
                                    unsigned int fail_count) {
+    TestCardResult result;
     RpmLoopCard card;
     rpm_loop_card_init(&card);
     set_rpm_loop_rpm(&card, rpm, 1);
     set_rpm_loop_counts(&card, pass_count, fail_count);
     rpm_loop_card_set_sample_ready(&card);
-    render_rpm_loop(&card,
-                    (rpm >= 285U && rpm <= 315U)
-                    ? TEST_CARD_RESULT_PASS
-                    : TEST_CARD_RESULT_OUT_OF_RANGE);
+
+    if (rpm >= 285U && rpm <= 315U) {
+        result = TEST_CARD_RESULT_PASS;
+    } else {
+        result = TEST_CARD_RESULT_OUT_OF_RANGE;
+    }
+    render_rpm_loop(&card, result);
 }
 
 static void render_rpm_loop_active_phase(unsigned int rpm,
@@ -852,7 +877,11 @@ static void render_rpm_loop_active_phase(unsigned int rpm,
     set_rpm_loop_rpm(&card, rpm, rpm != 0);
     set_rpm_loop_counts(&card, pass_count, fail_count);
     rpm_loop_card_set_last_status(&card, "RUN");
-    rpm_loop_card_set_info_status(&card, info ? info : "RUN");
+    if (info) {
+        rpm_loop_card_set_info_status(&card, info);
+    } else {
+        rpm_loop_card_set_info_status(&card, "RUN");
+    }
     render_rpm_loop(&card, TEST_CARD_RESULT_ACTIVE);
 }
 
@@ -1009,10 +1038,9 @@ static void run_all_tests(unsigned char human_mode) {
 
     set_report_status(REPORT_STATUS_RUNNING);
     for (unsigned char i = 0; i < RUN_ALL_TEST_COUNT; i++) {
-        if (human_mode) delay_ms(RUN_ALL_RUNNING_DELAY_EFFECTIVE_MS);
         run_all_test_list[i](0);
-        ui_render_report_card();
         if (human_mode) delay_ms(RUN_ALL_RESULT_DELAY_EFFECTIVE_MS);
+        ui_render_report_card();
     }
     set_report_status(REPORT_STATUS_COMPLETE);
     ui_render_report_card();
@@ -1105,13 +1133,12 @@ int main(void) {
                 memset(&results, 0, sizeof(results));
                 last_test_failed = 0;
                 reset_report_progress();
-                printf("CLEARED\n");
+                ui_render_report_card();
                 press_any_key(1);
                 menu_dirty = 1;
                 break;
             case 'Q':
                 motor_off();
-                printf("EXIT\n");
                 return 0;
             default:
                 /* Ignore unknown keys in menu to avoid display jitter. */

@@ -121,6 +121,40 @@ if (menu_resolve_action_key(key, &selected, &changed)) {
 ### Screen Update Pattern
 Test logic writes results to a `TestCard` struct; rendering function converts to screen memory in one pass. No partial updates.
 
+## Known SCCZ80 / z88dk Pitfalls
+
+### Do not use ternary expressions anywhere in this codebase
+SCCZ80 (the z88dk C compiler) has a code-generation bug with ternary expressions (`cond ? a : b`). The false branch (`b`) is **always** produced regardless of the condition. This manifests silently — no warning, no error — and has caused persistent, hard-to-diagnose bugs (e.g. the RPM pass/fail result always rendering as FAIL).
+
+**The rule is simple: never write a ternary expression anywhere in this project.**
+
+**Do not write:**
+```c
+/* BUG: SCCZ80 always picks the false branch */
+render_rpm_loop(&card,
+    (rpm >= 285U && rpm <= 315U)
+        ? TEST_CARD_RESULT_PASS
+        : TEST_CARD_RESULT_OUT_OF_RANGE);
+
+/* Also broken — even initialising a variable with a ternary is unreliable */
+TestCardResult result = (rpm >= 285U && rpm <= 315U)
+    ? TEST_CARD_RESULT_PASS
+    : TEST_CARD_RESULT_OUT_OF_RANGE;
+```
+
+**Always use an explicit if/else:**
+```c
+TestCardResult result;
+if (rpm >= 285U && rpm <= 315U) {
+    result = TEST_CARD_RESULT_PASS;
+} else {
+    result = TEST_CARD_RESULT_OUT_OF_RANGE;
+}
+render_rpm_loop(&card, result);   /* correct */
+```
+
+This applies everywhere — function arguments, variable initialisers, return statements, struct field assignments. Any time a rendered value appears stuck on the wrong branch, look for a ternary and replace it with if/else.
+
 ## Project-Specific Conventions
 
 1. **External assembly functions** are declared `extern` and follow `_name_case` in the ASM file

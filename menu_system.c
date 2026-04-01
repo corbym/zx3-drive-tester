@@ -221,13 +221,24 @@ static void menu_apply_row_visual(unsigned char index, unsigned char selected) {
     if (index >= count) return;
 
     unsigned char row = (unsigned char) (1U + index);
-    unsigned char paper = selected ? ZX_COLOUR_CYAN : ZX_COLOUR_WHITE;
+    unsigned char paper;
+    unsigned char scroll_char;
+    if (selected) {
+        paper = ZX_COLOUR_CYAN;
+    } else {
+        paper = ZX_COLOUR_WHITE;
+    }
     ui_attr_set_run(row, 0, 32, ZX_COLOUR_BLACK, paper, 1);
     if (items[index].hot_col < 31U) {
         ui_attr_set_cell(row, (unsigned char) (items[index].hot_col + 1U),
                          ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
     }
-    ui_screen_put_char(row, 31, selected ? '~' : ' ');
+    if (selected) {
+        scroll_char = '~';
+    } else {
+        scroll_char = ' ';
+    }
+    ui_screen_put_char(row, 31, scroll_char);
 }
 
 void menu_update_selection(unsigned char old_index, unsigned char new_index) {

@@ -138,18 +138,30 @@ void ui_attr_set_cell(unsigned char row, unsigned char col,
                       unsigned char ink, unsigned char paper,
                       unsigned char bright) {
   volatile unsigned char* attr = (volatile unsigned char*)ZX_ATTR_BASE;
+  unsigned char bright_bit;
   if (row >= 24 || col >= 32) return;
+  if (bright) {
+      bright_bit = 1U;
+  } else {
+      bright_bit = 0U;
+  }
   attr[(unsigned short)row * 32U + col] =
-      (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
-                      ink & 0x07U);
+      (unsigned char)((bright_bit << 6) | ((paper & 0x07U) << 3) |
+                      (ink & 0x07U));
 }
 
 /* Fill all 768 attribute cells in one memset (replaces 768 ui_attr_set_cell
  * calls in the original loop, critical for first-render latency on Z80). */
 void ui_attr_fill(unsigned char ink, unsigned char paper, unsigned char bright) {
-  unsigned char attr_byte =
-      (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
-                      ink & 0x07U);
+  unsigned char bright_bit;
+  unsigned char attr_byte;
+  if (bright) {
+      bright_bit = 1U;
+  } else {
+      bright_bit = 0U;
+  }
+  attr_byte = (unsigned char)((bright_bit << 6) | ((paper & 0x07U) << 3) |
+                               (ink & 0x07U));
   memset((void*)ZX_ATTR_BASE, attr_byte, ZX_ATTR_SIZE);
 }
 
@@ -181,7 +193,13 @@ static void ui_screen_write_row(unsigned char row, const char* text,
   font = ui_active_font_ptr();
   pixels = (unsigned char*)ZX_PIXELS_BASE;
   attr = (volatile unsigned char*)ZX_ATTR_BASE;
-  unsigned char attr_byte = (unsigned char) (((bright ? 1U : 0U) << 6) | ((paper & 0x07U) << 3) |
+  unsigned char bright_bit;
+  if (bright) {
+      bright_bit = 1U;
+  } else {
+      bright_bit = 0U;
+  }
+  unsigned char attr_byte = (unsigned char) (((bright_bit) << 6) | ((paper & 0x07U) << 3) |
                                              (ink & 0x07U));
   memset((void*)&attr[(unsigned short)row * 32U], attr_byte, 32U);
 
@@ -229,8 +247,8 @@ void ui_set_drive_motor(unsigned char on) {
 }
 
 void ui_set_drive_st3(unsigned char st3) {
-    s_badge_ready     = (unsigned char)((st3 & 0x20U) ? 1U : 0U);
-    s_badge_wprot     = (unsigned char)((st3 & 0x40U) ? 1U : 0U);
+    if (st3 & 0x20U) { s_badge_ready = 1; } else { s_badge_ready = 0; }
+    if (st3 & 0x40U) { s_badge_wprot = 1; } else { s_badge_wprot = 0; }
     s_badge_st3_valid = 1;
 }
 
@@ -299,12 +317,18 @@ void ui_attr_set_run(unsigned char row, unsigned char start_col,
                      unsigned char ink, unsigned char paper,
                      unsigned char bright) {
   volatile unsigned char *attr = (volatile unsigned char *)ZX_ATTR_BASE;
+  unsigned char bright_bit;
   unsigned char attr_byte;
   unsigned char safe_count;
   if (row >= 24 || start_col >= 32 || count == 0) return;
-  attr_byte = (unsigned char)((bright ? 1U : 0U) << 6 | (paper & 0x07U) << 3 |
-                              ink & 0x07U);
-  safe_count = (unsigned char)(start_col + count > 32U ? 32U - start_col : count);
+  if (bright) { bright_bit = 1U; } else { bright_bit = 0U; }
+  attr_byte = (unsigned char)((bright_bit << 6) | ((paper & 0x07U) << 3) |
+                              (ink & 0x07U));
+  if (start_col + count > 32U) {
+      safe_count = (unsigned char)(32U - start_col);
+  } else {
+      safe_count = count;
+  }
   memset((void *)&attr[(unsigned short)row * 32U + start_col], attr_byte,
          safe_count);
 }
@@ -332,20 +356,36 @@ static void ui_style_screen_text_row(unsigned char row, const char* text) {
     label_end--;
   }
 
-  ui_attr_set_run(row, 0, label_end < 32U ? label_end : 32U,
-                  ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
-
-  ui_highlight_screen_value(
-      row, value_col, ZX_COLOUR_BLACK,
-      ui_line_is_alert(text) ? ZX_COLOUR_YELLOW : ZX_COLOUR_CYAN, 1);
+  {
+    unsigned char clamped_label_end;
+    unsigned char value_colour;
+    if (label_end < 32U) {
+        clamped_label_end = label_end;
+    } else {
+        clamped_label_end = 32U;
+    }
+    ui_attr_set_run(row, 0, clamped_label_end,
+                    ZX_COLOUR_BLUE, ZX_COLOUR_WHITE, 1);
+    if (ui_line_is_alert(text)) {
+        value_colour = ZX_COLOUR_YELLOW;
+    } else {
+        value_colour = ZX_COLOUR_CYAN;
+    }
+    ui_highlight_screen_value(row, value_col, ZX_COLOUR_BLACK, value_colour, 1);
+  }
 }
 
 static unsigned char ui_row_tag_compute(const char* text, unsigned char style) {
   /* DJB2-style checksum folded to 6 bits, combined with 2-bit style.
    * Final avalanche: spread bit-0 differences to bit 3 so that adjacent
    * single-character values (e.g. "0" vs "1") survive the & 0xFC mask. */
-  const unsigned char* p = (const unsigned char*)(text ? text : "");
+  const unsigned char* p;
   unsigned char h = 0x55U;
+  if (text) {
+      p = (const unsigned char*)text;
+  } else {
+      p = (const unsigned char*)"";
+  }
 
   while (*p) {
     h = (unsigned char)((h << 1) ^ *p++);
@@ -358,7 +398,8 @@ static unsigned char ui_row_tag_compute(const char* text, unsigned char style) {
 static void ui_screen_write_value(unsigned char row, unsigned char start_col,
                                   const char* value) {
   unsigned char col = start_col;
-  const char* p = value ? value : "";
+  const char* p;
+  if (value) { p = value; } else { p = ""; }
 
   while (col < 32U && *p) {
     ui_screen_put_char(row, col, *p++);
@@ -372,11 +413,13 @@ static void ui_screen_write_value(unsigned char row, unsigned char start_col,
 
 static void ui_render_cached_text_row(unsigned char row, const char* text,
                                       unsigned char row_style) {
-  const char* safe_text = text ? text : "";
+  const char* safe_text;
   unsigned char tag;
   unsigned char value_col;
 
   if (row >= 24U) return;
+
+  if (text) { safe_text = text; } else { safe_text = ""; }
 
   tag = ui_row_tag_compute(safe_text, row_style);
   if (ui_row_tag[row] == tag) {
@@ -394,10 +437,15 @@ static void ui_render_cached_text_row(unsigned char row, const char* text,
       unsigned char vtag = ui_row_tag_compute(safe_text + value_col, 0);
       if (vtag != ui_row_value_tag[row]) {
         ui_screen_write_value(row, value_col, safe_text + value_col);
-        ui_highlight_screen_value(
-            row, value_col, ZX_COLOUR_BLACK,
-            ui_line_is_alert(safe_text) ? ZX_COLOUR_YELLOW : ZX_COLOUR_CYAN,
-            1);
+        {
+          unsigned char vcol;
+          if (ui_line_is_alert(safe_text)) {
+              vcol = ZX_COLOUR_YELLOW;
+          } else {
+              vcol = ZX_COLOUR_CYAN;
+          }
+          ui_highlight_screen_value(row, value_col, ZX_COLOUR_BLACK, vcol, 1);
+        }
         ui_row_value_tag[row] = vtag;
       }
       ui_row_tag[row] = tag;
@@ -451,9 +499,13 @@ static void ui_render_row23(const char *controls) {
 
     /* badge chars — positions are fixed regardless of ST3 validity */
     buf[19] = 'R'; buf[20] = ':';
-    buf[21] = s_badge_st3_valid ? (s_badge_ready ? 'Y' : 'N') : '?';
+    if (s_badge_st3_valid) {
+        if (s_badge_ready) { buf[21] = 'Y'; } else { buf[21] = 'N'; }
+    } else { buf[21] = '?'; }
     buf[23] = 'W'; buf[24] = ':';
-    buf[25] = s_badge_st3_valid ? (s_badge_wprot ? 'Y' : 'N') : '?';
+    if (s_badge_st3_valid) {
+        if (s_badge_wprot) { buf[25] = 'Y'; } else { buf[25] = 'N'; }
+    } else { buf[25] = '?'; }
     buf[27] = 'M'; buf[28] = ':'; buf[29] = 'O';
     if (s_badge_motor_on) { buf[30] = 'N'; buf[31] = ' '; }
     else                  { buf[30] = 'F'; buf[31] = 'F'; }
@@ -462,13 +514,18 @@ static void ui_render_row23(const char *controls) {
 
     /* per-field colour overrides */
     if (s_badge_st3_valid) {
-        ui_attr_set_run(23, 19, 3, ZX_COLOUR_WHITE,
-                        s_badge_ready ? ZX_COLOUR_CYAN : ZX_COLOUR_YELLOW, 1);
-        ui_attr_set_run(23, 23, 3, ZX_COLOUR_WHITE,
-                        s_badge_wprot ? ZX_COLOUR_YELLOW : ZX_COLOUR_CYAN, 1);
+        unsigned char ready_col;
+        unsigned char wprot_col;
+        if (s_badge_ready) { ready_col = ZX_COLOUR_CYAN; } else { ready_col = ZX_COLOUR_YELLOW; }
+        if (s_badge_wprot) { wprot_col = ZX_COLOUR_YELLOW; } else { wprot_col = ZX_COLOUR_CYAN; }
+        ui_attr_set_run(23, 19, 3, ZX_COLOUR_WHITE, ready_col, 1);
+        ui_attr_set_run(23, 23, 3, ZX_COLOUR_WHITE, wprot_col, 1);
     }
-    ui_attr_set_run(23, 27, 5, ZX_COLOUR_WHITE,
-                    s_badge_motor_on ? ZX_COLOUR_CYAN : ZX_COLOUR_BLUE, 1);
+    {
+        unsigned char motor_col;
+        if (s_badge_motor_on) { motor_col = ZX_COLOUR_CYAN; } else { motor_col = ZX_COLOUR_BLUE; }
+        ui_attr_set_run(23, 27, 5, ZX_COLOUR_WHITE, motor_col, 1);
+    }
 }
 
 static void ui_begin_text_screen(const char* title, const char* controls) {
@@ -495,7 +552,11 @@ static void ui_begin_text_screen(const char* title, const char* controls) {
   ui_attr_fill(ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
 
   title_row[0] = ' ';
-  strncpy(&title_row[1], title ? title : "", 31U);
+  if (title) {
+      strncpy(&title_row[1], title, 31U);
+  } else {
+      strncpy(&title_row[1], "", 31U);
+  }
   title_row[32] = '\0';
   ui_screen_write_row(0, title_row, ZX_COLOUR_WHITE, ZX_COLOUR_BLACK, 1);
 
@@ -529,8 +590,11 @@ void ui_render_text_screen(const char* title, const char* controls,
 
   if ((result_label || result_value) && (unsigned char)(row + 1U) < 24U) {
     char result_buf[48];
-    snprintf(result_buf, sizeof(result_buf), "%s%s",
-             result_label ? result_label : "", result_value ? result_value : "");
+    const char *safe_rl;
+    const char *safe_rv;
+    if (result_label) { safe_rl = result_label; } else { safe_rl = ""; }
+    if (result_value) { safe_rv = result_value; } else { safe_rv = ""; }
+    snprintf(result_buf, sizeof(result_buf), "%s%s", safe_rl, safe_rv);
     ui_render_cached_text_row(row, "", UI_TEXT_ROW_STYLE_BLANK);
     ui_render_cached_text_row((unsigned char)(row + 1U), result_buf,
                               UI_TEXT_ROW_STYLE_RESULT);
@@ -619,7 +683,11 @@ void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) 
                           ZX_COLOUR_BLACK, ZX_COLOUR_WHITE, 0);
       continue;
     }
-    row_bytes = (unsigned char)(data_len - offset > 8U ? 8U : data_len - offset);
+    if (data_len - offset > 8U) {
+      row_bytes = 8U;
+    } else {
+      row_bytes = (unsigned char)(data_len - offset);
+    }
     col = 0U;
     for (b = 0U; b < 8U; b++) {
       if (b < row_bytes) {
@@ -627,7 +695,11 @@ void ui_render_hex_dump_panel(const unsigned char *data, unsigned int data_len) 
         row_buf[col++] = s_hex_digits[(bv >> 4) & 0x0FU];
         row_buf[col++] = s_hex_digits[bv & 0x0FU];
         row_buf[col++] = ' ';
-        row_buf[24U + b] = bv >= 0x20U && bv < 0x7FU ? (char)bv : '.';
+        if (bv >= 0x20U && bv < 0x7FU) {
+          row_buf[24U + b] = (char)bv;
+        } else {
+          row_buf[24U + b] = '.';
+        }
       } else {
         row_buf[col++] = ' ';
         row_buf[col++] = ' ';

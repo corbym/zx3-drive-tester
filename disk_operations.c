@@ -517,7 +517,10 @@ unsigned char fdc_measure_revolutions_ticks(unsigned char drive,
             rev_count++;
             if (rev_count >= num_revs) {
                 elapsed = (unsigned char)(frame_ticks() - start);
-                return elapsed ? elapsed : 1U;
+                if (elapsed) {
+                    return elapsed;
+                }
+                return 1U;
             }
         }
     }
