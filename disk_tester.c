@@ -173,7 +173,12 @@ static ReportCardPhase report_card_phase_from_status(unsigned char status) {
  * SE (bit 5) is set before returning; the IC bits (7-6) can be non-zero on
  * real +3 hardware even when the head physically reached the target track, so
  * we do not gate on IC here.  The SE confirmation from wait_seek_complete is
- * the authoritative signal that the command completed. */
+ * the authoritative signal that the command completed.
+ *
+ * WARNING: do NOT rewrite the body as a ternary expression.  SCCZ80 at -SO3
+ * mis-compiles `(st0 & 0x20U) ? 1 : 0` — it always evaluates to 0 (FAIL),
+ * causing every seek and recalibrate to be reported as failed regardless of
+ * the actual hardware result.  The comparison + cast form below is correct. */
 static unsigned char seek_completion_ok(unsigned char st0) {
     return (unsigned char) ((st0 & 0x20U) != 0U);
 }
@@ -512,7 +517,6 @@ static void test_seek_and_read(int interactive) {
                 seek_required = 1;
                 recal_required = 1;
                 ui_redraw_required = 0;
-                delay_ms(20);
                 continue;
             }
             seek_read_card_set_ready(&card, 1);
@@ -528,7 +532,8 @@ static void test_seek_and_read(int interactive) {
                         seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
                         seek_required = 1;
                         ui_redraw_required = 0;
-                        delay_ms(20);
+                        cmd_seek(FDC_DRIVE, 0, 39U); /* try to get heads out of the way for the next attempt */
+                        wait_seek_complete(FDC_DRIVE, &seek_result);
                         continue;
                     }
                     seek_read_card_set_recal_status(&card, RECAL_SEEK_STATUS_PASS);
@@ -543,7 +548,6 @@ static void test_seek_and_read(int interactive) {
                     seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
                     seek_required = 1;
                     ui_redraw_required = 0;
-                    delay_ms(20);
                     continue;
                 }
                 seek_read_card_set_seek_status(&card, RECAL_SEEK_STATUS_PASS);
@@ -563,7 +567,8 @@ static void test_seek_and_read(int interactive) {
                 seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
                 seek_required = 1;
                 ui_redraw_required = 0;
-                delay_ms(20);
+                cmd_seek(FDC_DRIVE, 0, 39U); /* try to get heads out of the way for the next attempt */
+                wait_seek_complete(FDC_DRIVE, &seek_result);
                 continue;
             }
 
@@ -575,7 +580,8 @@ static void test_seek_and_read(int interactive) {
                 seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
                 seek_required = 1;
                 ui_redraw_required = 0;
-                delay_ms(20);
+                cmd_seek(FDC_DRIVE, 0, 39U); /* try to get heads out of the way for the next attempt */
+                wait_seek_complete(FDC_DRIVE, &seek_result);
                 continue;
             }
             {
@@ -601,7 +607,8 @@ static void test_seek_and_read(int interactive) {
                 seek_read_card_render(&card, TEST_CARD_RESULT_FAIL);
                 seek_required = 1;
                 ui_redraw_required = 0;
-                delay_ms(20);
+                cmd_seek(FDC_DRIVE, 0, 39U); /* try to get heads out of the way for the next attempt */
+                wait_seek_complete(FDC_DRIVE, &seek_result);
                 continue;
             }
 
@@ -616,7 +623,7 @@ static void test_seek_and_read(int interactive) {
             ui_render_hex_dump_panel(sector_data, sector_data_len);
             ui_redraw_required = 0;
 
-            delay_ms((unsigned int)(READ_LOOP_PAUSE_STEPS * READ_LOOP_PAUSE_MS));
+            delay_ms((unsigned int)(READ_LOOP_PAUSE_MS));
             continue;
         }
 
